@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from gen_peg_in_hole import generate_xml
+from mkpeg import generate_xml
 
 
 HERE = Path(__file__).parent

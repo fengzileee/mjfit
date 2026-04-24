@@ -7,12 +7,12 @@ convex-vs-convex. No V-HACD, no CoACD, no SDF. Works for any hole shape that
 is star-shaped from its centroid (all convex polygons + the usual stars/gears).
 
 CLI:
-    python gen_peg_in_hole.py --shape circle --output circle.xml
-    python gen_peg_in_hole.py --shape star --hole-size 0.03 -o star.xml
-    python gen_peg_in_hole.py --shape triangle -o tri.xml
+    python mkpeg.py --shape circle --output circle.xml
+    python mkpeg.py --shape star --hole-size 0.03 -o star.xml
+    python mkpeg.py --shape triangle -o tri.xml
 
 Library:
-    from gen_peg_in_hole import generate_xml
+    from mkpeg import generate_xml
     xml = generate_xml(shape='hexagon', hole_size=0.02)
 """
 from __future__ import annotations

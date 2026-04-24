@@ -45,21 +45,21 @@ pip install numpy mujoco mapbox_earcut pyyaml
 Drop the peg into a star-shaped hole:
 
 ```bash
-python3 gen_peg_in_hole.py --shape star -o star.xml
+python3 mkpeg.py --shape star -o star.xml
 python3 -m mujoco.viewer --mjcf=star.xml
 ```
 
 Drive from a declarative config:
 
 ```bash
-python3 gen_peg_in_hole.py --config examples/connectors/usbc.yaml -o usbc.xml
+python3 mkpeg.py --config examples/connectors/usbc.yaml -o usbc.xml
 ```
 
 Drive from custom CSV polygons:
 
 ```bash
-python3 gen_peg_in_hole.py --hole-csv my_hole.csv -o out.xml
-python3 gen_peg_in_hole.py \
+python3 mkpeg.py --hole-csv my_hole.csv -o out.xml
+python3 mkpeg.py \
     --hole-csv my_hole.csv \
     --hole-island-csv my_island.csv \
     -o out.xml                      # hollow-shell peg
@@ -128,7 +128,7 @@ depth = `plate_thickness + clearance`; solid back above).
 ## Library API
 
 ```python
-from gen_peg_in_hole import generate_xml, generate_from_config
+from mkpeg import generate_xml, generate_from_config
 
 # Built-in named shape
 xml = generate_xml(shape='star', hole_size=0.02)
@@ -206,7 +206,7 @@ For free-spinning torsional contact issues, bump to `condim=6`.
 ## Directory layout
 
 ```
-gen_peg_in_hole.py          # the generator (library + CLI)
+mkpeg.py          # the generator (library + CLI)
 examples/
   connectors/               # declarative YAML configs
     circle.yaml  triangle.yaml  square.yaml

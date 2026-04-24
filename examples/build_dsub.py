@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from gen_peg_in_hole import generate_xml
+from mkpeg import generate_xml
 
 # D-shape outer: rectangle with top corners chamfered (keyed).
 W, H, c = 0.020, 0.010, 0.0015
