@@ -1,0 +1,19 @@
+# XLR 3-pin (pro-audio). 14 mm barrel, 3 pins in equilateral triangle,
+# ~3.45 mm pitch from shell center, pin diameter ~2 mm.
+
+clearance:       0.0001
+plate_size:      0.060
+plate_thickness: 0.008
+peg_length:      0.016
+peg_height:      0.020
+
+hole:
+  type:   circle
+  radius: 0.007
+  n:      32
+
+# Three pin posts arranged in equilateral triangle (top, lower-left, lower-right)
+islands:
+  - { type: circle, radius: 0.001, n: 16, center: [ 0.000000,  0.00345] }
+  - { type: circle, radius: 0.001, n: 16, center: [-0.002988, -0.001725] }
+  - { type: circle, radius: 0.001, n: 16, center: [ 0.002988, -0.001725] }

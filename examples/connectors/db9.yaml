@@ -1,0 +1,31 @@
+# DB9 D-sub. Outer 20 x 10 mm rectangle with top corners chamfered for keying.
+# 9 pin posts in 2 staggered rows (5 bottom, 4 top), 0.5 mm radius, 2.8 mm pitch.
+
+clearance:       0.0001
+plate_size:      0.050
+plate_thickness: 0.004
+peg_length:      0.015
+peg_height:      0.020
+
+hole:
+  type: polygon
+  vertices:
+    - [-0.010, -0.005]
+    - [ 0.010, -0.005]
+    - [ 0.010,  0.0035]   # right chamfer start
+    - [ 0.0085, 0.005]    # right chamfer end
+    - [-0.0085, 0.005]    # left chamfer start
+    - [-0.010,  0.0035]   # left chamfer end
+
+islands:
+  # bottom row: 5 pins
+  - { type: circle, radius: 0.0005, n: 12, center: [-0.0056, -0.0015] }
+  - { type: circle, radius: 0.0005, n: 12, center: [-0.0028, -0.0015] }
+  - { type: circle, radius: 0.0005, n: 12, center: [ 0.0000, -0.0015] }
+  - { type: circle, radius: 0.0005, n: 12, center: [ 0.0028, -0.0015] }
+  - { type: circle, radius: 0.0005, n: 12, center: [ 0.0056, -0.0015] }
+  # top row: 4 pins staggered
+  - { type: circle, radius: 0.0005, n: 12, center: [-0.0042,  0.0015] }
+  - { type: circle, radius: 0.0005, n: 12, center: [-0.0014,  0.0015] }
+  - { type: circle, radius: 0.0005, n: 12, center: [ 0.0014,  0.0015] }
+  - { type: circle, radius: 0.0005, n: 12, center: [ 0.0042,  0.0015] }

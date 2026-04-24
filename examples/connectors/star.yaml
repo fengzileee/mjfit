@@ -1,0 +1,14 @@
+# 5-point star peg-in-hole. Tests non-convex + non-star-shaped features
+# (hole and peg both decomposed via ear-clipping).
+
+clearance:       0.0005
+plate_size:      0.2
+plate_thickness: 0.02
+peg_length:      0.06
+peg_height:      0.10
+
+hole:
+  type:         star
+  n_points:     5
+  outer_radius: 0.025
+  inner_radius: 0.01125   # outer * 0.45, matches the built-in shape
