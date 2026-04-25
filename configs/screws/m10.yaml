@@ -1,0 +1,36 @@
+# M10 x 1.5 (ISO coarse), hex head + hex nut.
+# Standard metric fastener with ~13 engaged threads over 20 mm.
+
+scale: 5.0
+
+major_diameter:   0.010    # D = 10 mm
+pitch:            0.0015   # P = 1.5 mm (ISO M10 coarse)
+thread_length:    0.020    # 20 mm engaged thread
+n_starts:         1
+segments_per_turn: 24
+thread_form:      iso
+handedness:       right
+clearance:        0.00020  # 100 µm flank-normal gap (free-fit M10 class)
+friction:   0.3 
+condim:  3
+
+
+bolt:
+  include:             true
+  shank_length:        0.008      # 8 mm unthreaded shank under head
+  head_height:         0.0064
+  head_across_flats:   0.016      # 16 mm (standard M10 hex)
+  head_shape:          hex
+  density:             100
+
+nut:
+  include:             true
+  height:              0.008      # 8 mm thick hex nut
+  across_flats:        0.016      # 16 mm
+  shell_shape:         hex
+  density:             10
+
+include_floor:    true
+free_bolt:        true
+free_nut:         true   
+mesh_only:        true

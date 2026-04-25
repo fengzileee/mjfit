@@ -1,13 +1,15 @@
-# peg-in-hole MJCF generator
+# peg-in-hole + threading MJCF generators
 
-Generate MuJoCo peg-in-hole scenes with arbitrary 2D hole shapes — including
-concave holes, holes with one or more solid "islands" suspended inside them
-(USB-A tongue, D-sub pins, XLR contacts), and plugs that wrap those islands
-as true hollow shells.
+Two tools here, sharing the same idea:
 
-The point: you can simulate connector insertion in MuJoCo without
-V-HACD / CoACD / SDF. Every geom the generator emits is a convex prism, so
-all contact pairs are convex-vs-convex, handled natively.
+1. **`mkpeg.py`** — peg-in-hole scenes with arbitrary 2D hole shapes (plus
+   island-bearing connectors like USB-A, D-sub).
+2. **`mkscrew.py`** — threaded bolt/nut pairs (ISO metric, single- or
+   multi-start, cylindrical or hex exteriors).
+
+Both avoid V-HACD / CoACD / SDF: every geom emitted is a convex prism or
+convex polyhedron, so all contact pairs are convex-vs-convex and handled
+natively by MuJoCo.
 
 ## Why
 
@@ -206,16 +208,169 @@ For free-spinning torsional contact issues, bump to `condim=6`.
 ## Directory layout
 
 ```
-mkpeg.py          # the generator (library + CLI)
+mkpeg.py          # peg-in-hole generator (library + CLI)
+mkscrew.py        # threaded bolt/nut generator (library + CLI)
 examples/
-  connectors/               # declarative YAML configs
+  connectors/               # declarative YAML configs for peg-in-hole
     circle.yaml  triangle.yaml  square.yaml
     pentagon.yaml  hexagon.yaml  octagon.yaml
     star.yaml  slot.yaml
     usb_a.yaml  usbc.yaml  hdmi.yaml
     xlr3.yaml  rj45.yaml  db9.yaml
+  screws/                   # declarative YAML configs for bolt/nut
+    m6.yaml  m10.yaml
   build_connectors.py       # Python driver, same content as YAML but programmatic
   build_dsub.py             # example of scripted pin placement
   *.csv                     # raw polygon data for CSV-driven inputs
   peg_*.xml                 # generated MJCF outputs (regenerate any time)
 ```
+
+---
+
+# Threading: `mkscrew.py`
+
+Same idea as `mkpeg.py`, but the discretization axis is the thread helix
+instead of the 2D hole boundary. Each short angular slice of a thread (Δθ
+of a few degrees) is a twisted triangular prism — still convex — so the
+bolt = **core cylinder + N helical thread wedges** and the nut = **annular
+shell + N inward-facing thread wedges**. All contact pairs stay convex-vs-
+convex; no SDF, no V-HACD.
+
+## Quick start
+
+Two scene modes are supported:
+
+**Bolt-driven** (default): nut welded to world, bolt free and positioned above,
+tip-down. Spin the bolt CW about z — it threads down into the fixed nut.
+```bash
+python3 mkscrew.py --config examples/screws/m10.yaml -o m10.xml
+python3 -m mujoco.viewer --mjcf=m10.xml
+```
+
+**Nut-driven**: bolt welded with head at the floor and tip pointing up, nut
+free and positioned at the top of the bolt. Spin the nut CW about z — it
+threads down onto the fixed bolt (natural "tightening a nut onto a stud"
+setup). Enable with `nut_driven: true` in the YAML or `--nut-driven` on CLI.
+```bash
+python3 mkscrew.py --config examples/screws/m10.yaml --nut-driven -o m10.xml
+```
+In this mode the bolt's body carries `quat="0 0 1 0"` (180° about y) so its
+local +z (head direction) flips to world −z; the helix handedness is
+preserved by the rotation, so it's still a right-handed thread in world.
+
+## Config schema
+
+```yaml
+major_diameter:  0.010      # D (e.g., M10 → 10 mm)
+pitch:           0.0015     # P (axial distance per turn per start)
+thread_length:   0.020      # axial length of bolt threads
+n_starts:        1          # multi-start threads: lead = n_starts × pitch
+segments_per_turn: 24       # angular segments per helix revolution
+thread_form:     iso        # ISO 60° (only form in v1)
+handedness:      right      # 'right' or 'left'
+clearance:       0.00010    # flank-normal gap between bolt and nut threads
+
+bolt:
+  shank_length:  0.008      # unthreaded shank above the thread
+  head_height:   0.0064
+  head_across_flats: 0.016  # for head_shape: hex
+  head_shape:    hex        # 'cylinder' or 'hex'
+
+nut:
+  height:        0.008
+  across_flats:  0.016      # for shell_shape: hex
+  shell_shape:   hex        # 'cylinder' or 'hex'
+  shell_sectors: 16         # chord count for cylindrical nut bore
+```
+
+Every length scales uniformly with `scale` (and `--scale` on the CLI).
+
+## Library API
+
+```python
+from mkscrew import generate_screw_xml, generate_screw_from_config
+
+# Parametric call
+xml = generate_screw_xml(
+    major_diameter=0.010, pitch=0.0015, thread_length=0.020,
+    clearance=1e-4, bolt_head_shape='hex', nut_shell_shape='hex',
+)
+
+# Config-driven
+import yaml
+cfg = yaml.safe_load(open('examples/screws/m10.yaml'))
+xml = generate_screw_from_config(cfg)
+```
+
+## How it works
+
+1. **Thread profile** (meridian plane): ISO 60°-angle truncated trapezoid,
+   parameterized by pitch P. External thread: base at minor radius r_min,
+   crest at major radius r_max. Internal thread: same shape, inverted
+   radially (base at r_max, tip at r_min).
+2. **Clearance**: reduces thread crest radius by `clearance/2` on both bolt
+   and nut, preserving the 60° flank angle. Resulting flank-to-flank
+   perpendicular gap ≈ clearance.
+3. **Axial offset for interlock**: the nut's thread is axially shifted by
+   `−7P/16` from the bolt's so the nut's falling flank coincides with the
+   bolt's rising flank (zero-clearance case). This is what makes the two
+   threads mesh rather than collide.
+4. **Wedge construction**: for each angular segment [θᵢ, θᵢ₊₁] of each
+   turn of each start, the thread profile is swept through Δθ with the
+   appropriate helical axial advance (`Δθ · lead / 2π`). Result: an 8-vertex
+   convex polyhedron, emitted as `<mesh vertex="..."/>` so MuJoCo convex-
+   hulls it.
+5. **Bolt assembly**: one analytical `<geom type="cylinder">` at r_min (the
+   core) plus the thread wedges. Hex head is a 6-gon convex prism; cylinder
+   head is another primitive cylinder.
+6. **Nut assembly**: annular shell decomposed into sectors (cylindrical
+   nut) or via ear-clipping (hex nut — hex-minus-bore). Thread wedges point
+   inward. Shell inner radius is inflated so chord midpoints sit exactly
+   at `r_max + clearance/2` — ensures the flat chord doesn't intrude into
+   the thread engagement zone.
+
+## Clearance and friction tuning
+
+Threading efficiency (Δz per revolution relative to nominal P) depends on
+clearance, spin rate, and friction:
+
+- **Tight clearance** (c / P < 5%) produces many simultaneous contacts and
+  can cause the contact solver to under-resolve, dragging efficiency toward
+  ~50%. Loosen to 7–10% of pitch for clean threading.
+- **Slow rotation** makes efficiency dip (solver play at low rates — the
+  bolt "slips through" the flank-normal clearance). Faster spin pins the
+  bolt to a consistent flank contact.
+- **Segments per turn**: too coarse (≤12) produces visible chord error and
+  catching at segment seams. 24 is a good default; bump to 32–48 for tight
+  simulations.
+
+For M10 at clearance=100 µm, segments_per_turn=24, spin=−15 rad/s: the
+generator reliably produces ≥95% threading efficiency (Δz/rev vs. nominal
+pitch) on the provided example configs.
+
+## Verification
+
+```python
+import mujoco, numpy as np
+m = mujoco.MjModel.from_xml_path('m10.xml')
+d = mujoco.MjData(m)
+bolt = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'bolt')
+qvel0 = m.jnt_dofadr[m.body_jntadr[bolt]]
+z0 = d.qpos[m.jnt_qposadr[m.body_jntadr[bolt]] + 2]
+for _ in range(2000):
+    d.qvel[qvel0 + 5] = -15.0      # CW about z → right-handed threads in
+    d.qvel[qvel0 + 0:qvel0 + 2] = 0
+    d.qvel[qvel0 + 3:qvel0 + 5] = 0
+    mujoco.mj_step(m, d)
+print('advance:', d.qpos[m.jnt_qposadr[m.body_jntadr[bolt]] + 2] - z0)
+```
+
+## Limitations
+
+- ISO metric only in v1. Acme/trapezoidal, UTS imperial, buttress are
+  profile-function plug-ins (edit `_iso_thread_profile_external` to add).
+- Mesh count scales with (thread_length / pitch) × segments_per_turn. M10
+  with 20 mm thread and 24 segs/turn → ~500 meshes; MuJoCo handles it fine
+  but loading time grows linearly.
+- No support yet for left-hand + right-hand mixed assemblies, tapered
+  threads (NPT), or multi-material bolts (the whole bolt is one body).

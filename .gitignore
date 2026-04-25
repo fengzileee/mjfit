@@ -7,3 +7,6 @@ venv/
 
 # macOS
 .DS_Store
+
+examples/m6
+examples/m10

@@ -1,0 +1,159 @@
+<mujoco model="peg_in_hole">
+  <default>
+    <default class="visual">
+      <geom group="2" contype="0" conaffinity="0" density="0"/>
+    </default>
+    <default class="collision">
+      <geom group="3"/>
+    </default>
+  </default>
+  <asset>
+    <mesh name="plate_visual" file="plate_visual.obj"/>
+    <mesh name="peg_visual" file="peg_visual.obj"/>
+    <mesh name="handle_visual" file="handle_visual.obj"/>
+    <mesh name="plate_0" file="plate_0.obj"/>
+    <mesh name="plate_1" file="plate_1.obj"/>
+    <mesh name="plate_2" file="plate_2.obj"/>
+    <mesh name="plate_3" file="plate_3.obj"/>
+    <mesh name="plate_4" file="plate_4.obj"/>
+    <mesh name="plate_5" file="plate_5.obj"/>
+    <mesh name="plate_6" file="plate_6.obj"/>
+    <mesh name="plate_7" file="plate_7.obj"/>
+    <mesh name="plate_8" file="plate_8.obj"/>
+    <mesh name="plate_9" file="plate_9.obj"/>
+    <mesh name="plate_10" file="plate_10.obj"/>
+    <mesh name="plate_11" file="plate_11.obj"/>
+    <mesh name="plate_12" file="plate_12.obj"/>
+    <mesh name="plate_13" file="plate_13.obj"/>
+    <mesh name="plate_14" file="plate_14.obj"/>
+    <mesh name="plate_15" file="plate_15.obj"/>
+    <mesh name="plate_16" file="plate_16.obj"/>
+    <mesh name="plate_17" file="plate_17.obj"/>
+    <mesh name="plate_18" file="plate_18.obj"/>
+    <mesh name="plate_19" file="plate_19.obj"/>
+    <mesh name="plate_20" file="plate_20.obj"/>
+    <mesh name="plate_21" file="plate_21.obj"/>
+    <mesh name="plate_22" file="plate_22.obj"/>
+    <mesh name="plate_23" file="plate_23.obj"/>
+    <mesh name="island_0" file="island_0.obj"/>
+    <mesh name="peg_ring_0" file="peg_ring_0.obj"/>
+    <mesh name="peg_ring_1" file="peg_ring_1.obj"/>
+    <mesh name="peg_ring_2" file="peg_ring_2.obj"/>
+    <mesh name="peg_ring_3" file="peg_ring_3.obj"/>
+    <mesh name="peg_ring_4" file="peg_ring_4.obj"/>
+    <mesh name="peg_ring_5" file="peg_ring_5.obj"/>
+    <mesh name="peg_ring_6" file="peg_ring_6.obj"/>
+    <mesh name="peg_ring_7" file="peg_ring_7.obj"/>
+    <mesh name="peg_ring_8" file="peg_ring_8.obj"/>
+    <mesh name="peg_ring_9" file="peg_ring_9.obj"/>
+    <mesh name="peg_ring_10" file="peg_ring_10.obj"/>
+    <mesh name="peg_ring_11" file="peg_ring_11.obj"/>
+    <mesh name="peg_ring_12" file="peg_ring_12.obj"/>
+    <mesh name="peg_ring_13" file="peg_ring_13.obj"/>
+    <mesh name="peg_ring_14" file="peg_ring_14.obj"/>
+    <mesh name="peg_ring_15" file="peg_ring_15.obj"/>
+    <mesh name="peg_ring_16" file="peg_ring_16.obj"/>
+    <mesh name="peg_ring_17" file="peg_ring_17.obj"/>
+    <mesh name="peg_ring_18" file="peg_ring_18.obj"/>
+    <mesh name="peg_ring_19" file="peg_ring_19.obj"/>
+    <mesh name="peg_ring_20" file="peg_ring_20.obj"/>
+    <mesh name="peg_ring_21" file="peg_ring_21.obj"/>
+    <mesh name="peg_ring_22" file="peg_ring_22.obj"/>
+    <mesh name="peg_ring_23" file="peg_ring_23.obj"/>
+    <mesh name="peg_ring_24" file="peg_ring_24.obj"/>
+    <mesh name="peg_ring_25" file="peg_ring_25.obj"/>
+    <mesh name="peg_ring_26" file="peg_ring_26.obj"/>
+    <mesh name="peg_ring_27" file="peg_ring_27.obj"/>
+    <mesh name="peg_ring_28" file="peg_ring_28.obj"/>
+    <mesh name="peg_ring_29" file="peg_ring_29.obj"/>
+    <mesh name="peg_ring_30" file="peg_ring_30.obj"/>
+    <mesh name="peg_ring_31" file="peg_ring_31.obj"/>
+    <mesh name="peg_ring_32" file="peg_ring_32.obj"/>
+    <mesh name="peg_ring_33" file="peg_ring_33.obj"/>
+    <mesh name="peg_ring_34" file="peg_ring_34.obj"/>
+    <mesh name="peg_ring_35" file="peg_ring_35.obj"/>
+    <mesh name="peg_ring_36" file="peg_ring_36.obj"/>
+    <mesh name="peg_ring_37" file="peg_ring_37.obj"/>
+    <mesh name="peg_ring_38" file="peg_ring_38.obj"/>
+    <mesh name="peg_ring_39" file="peg_ring_39.obj"/>
+    <mesh name="peg_back" file="peg_back.obj"/>
+    <mesh name="handle_0" file="handle_0.obj"/>
+  </asset>
+  <worldbody>
+    <body name="plate" pos="0 0 0.021000">
+      <geom type="mesh" mesh="plate_visual" class="visual" rgba="0.70 0.75 0.82 1"/>
+      <geom type="mesh" mesh="plate_0" class="collision"/>
+      <geom type="mesh" mesh="plate_1" class="collision"/>
+      <geom type="mesh" mesh="plate_2" class="collision"/>
+      <geom type="mesh" mesh="plate_3" class="collision"/>
+      <geom type="mesh" mesh="plate_4" class="collision"/>
+      <geom type="mesh" mesh="plate_5" class="collision"/>
+      <geom type="mesh" mesh="plate_6" class="collision"/>
+      <geom type="mesh" mesh="plate_7" class="collision"/>
+      <geom type="mesh" mesh="plate_8" class="collision"/>
+      <geom type="mesh" mesh="plate_9" class="collision"/>
+      <geom type="mesh" mesh="plate_10" class="collision"/>
+      <geom type="mesh" mesh="plate_11" class="collision"/>
+      <geom type="mesh" mesh="plate_12" class="collision"/>
+      <geom type="mesh" mesh="plate_13" class="collision"/>
+      <geom type="mesh" mesh="plate_14" class="collision"/>
+      <geom type="mesh" mesh="plate_15" class="collision"/>
+      <geom type="mesh" mesh="plate_16" class="collision"/>
+      <geom type="mesh" mesh="plate_17" class="collision"/>
+      <geom type="mesh" mesh="plate_18" class="collision"/>
+      <geom type="mesh" mesh="plate_19" class="collision"/>
+      <geom type="mesh" mesh="plate_20" class="collision"/>
+      <geom type="mesh" mesh="plate_21" class="collision"/>
+      <geom type="mesh" mesh="plate_22" class="collision"/>
+      <geom type="mesh" mesh="plate_23" class="collision"/>
+      <geom type="mesh" mesh="island_0" class="collision"/>
+    </body>
+    <body name="peg" pos="0.000060 0 0.142000">
+      <freejoint/>
+      <geom type="mesh" mesh="peg_visual" class="visual" rgba="0.90 0.30 0.30 1"/>
+      <geom type="mesh" mesh="handle_visual" class="visual" rgba="0.55 0.30 0.30 1"/>
+      <geom type="mesh" mesh="peg_ring_0" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_1" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_2" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_3" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_4" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_5" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_6" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_7" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_8" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_9" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_10" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_11" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_12" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_13" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_14" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_15" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_16" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_17" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_18" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_19" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_20" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_21" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_22" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_23" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_24" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_25" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_26" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_27" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_28" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_29" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_30" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_31" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_32" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_33" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_34" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_35" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_36" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_37" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_38" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_ring_39" pos="0 0 -0.001400" class="collision"/>
+      <geom type="mesh" mesh="peg_back" pos="0 0 0.021100" class="collision"/>
+      <geom type="mesh" mesh="handle_0" pos="0 0 0.047500" class="collision"/>
+    </body>
+  </worldbody>
+</mujoco>
