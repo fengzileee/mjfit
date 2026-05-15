@@ -1,0 +1,31 @@
+# Single 24-tooth gear centered at the origin.
+
+scale: 1.0
+
+module:                 0.003
+face_width:             0.008
+pressure_angle_degrees: 20.0
+addendum_coeff:         1.00
+dedendum_coeff:         1.25
+tooth_width_ratio:      0.48
+backlash:               0.00015
+
+gear_a:
+  teeth:    24
+  density:  7800
+
+gear_b:
+  include: false
+  teeth:   24
+
+support:
+  include_axles: true
+  axle_margin:   0.004
+
+actuator:
+  include: true
+  gear:    0.015
+
+friction: 0.8
+condim:   3
+timestep: 0.001

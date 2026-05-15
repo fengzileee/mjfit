@@ -1,15 +1,17 @@
-# peg-in-hole + threading MJCF generators
+# peg-in-hole + threading + gear MJCF generators
 
-Two tools here, sharing the same idea:
+Three tools here, sharing the same idea:
 
 1. **`mkpeg.py`** — peg-in-hole scenes with arbitrary 2D hole shapes (plus
    island-bearing connectors like USB-A, D-sub).
 2. **`mkscrew.py`** — threaded bolt/nut pairs (ISO metric, single- or
    multi-start, cylindrical or hex exteriors).
+3. **`mkgear.py`** — spur gears and gear pairs built from generated gear
+   outlines with convex collision-prism geoms.
 
-Both avoid V-HACD / CoACD / SDF: every geom emitted is a convex prism or
-convex polyhedron, so all contact pairs are convex-vs-convex and handled
-natively by MuJoCo.
+All three avoid V-HACD / CoACD / SDF: every contact surface is either a
+MuJoCo primitive, a convex prism, or a convex polyhedron, so contact pairs are
+handled natively by MuJoCo.
 
 ## Why
 
@@ -54,7 +56,7 @@ python3 -m mujoco.viewer --mjcf=star.xml
 Drive from a declarative config:
 
 ```bash
-python3 mkpeg.py --config examples/connectors/usbc.yaml -o usbc.xml
+python3 mkpeg.py --config configs/connectors/usbc.yaml -o usbc.xml
 ```
 
 Drive from custom CSV polygons:
@@ -65,6 +67,13 @@ python3 mkpeg.py \
     --hole-csv my_hole.csv \
     --hole-island-csv my_island.csv \
     -o out.xml                      # hollow-shell peg
+```
+
+Generate a primitive-geometry spur gear pair:
+
+```bash
+python3 mkgear.py --config configs/gears/spur_pair.yaml -o gear_pair.xml
+python3 -m mujoco.viewer --mjcf=gear_pair.xml
 ```
 
 ## Config schema (YAML / JSON / TOML)
@@ -210,15 +219,12 @@ For free-spinning torsional contact issues, bump to `condim=6`.
 ```
 mkpeg.py          # peg-in-hole generator (library + CLI)
 mkscrew.py        # threaded bolt/nut generator (library + CLI)
-examples/
+mkgear.py         # primitive-geometry spur gear generator (library + CLI)
+configs/
   connectors/               # declarative YAML configs for peg-in-hole
-    circle.yaml  triangle.yaml  square.yaml
-    pentagon.yaml  hexagon.yaml  octagon.yaml
-    star.yaml  slot.yaml
-    usb_a.yaml  usbc.yaml  hdmi.yaml
-    xlr3.yaml  rj45.yaml  db9.yaml
   screws/                   # declarative YAML configs for bolt/nut
-    m6.yaml  m10.yaml
+  gears/                    # declarative YAML configs for primitive gears
+examples/
   build_connectors.py       # Python driver, same content as YAML but programmatic
   build_dsub.py             # example of scripted pin placement
   *.csv                     # raw polygon data for CSV-driven inputs
@@ -243,7 +249,7 @@ Two scene modes are supported:
 **Bolt-driven** (default): nut welded to world, bolt free and positioned above,
 tip-down. Spin the bolt CW about z — it threads down into the fixed nut.
 ```bash
-python3 mkscrew.py --config examples/screws/m10.yaml -o m10.xml
+python3 mkscrew.py --config configs/screws/m10.yaml -o m10.xml
 python3 -m mujoco.viewer --mjcf=m10.xml
 ```
 
@@ -252,7 +258,7 @@ free and positioned at the top of the bolt. Spin the nut CW about z — it
 threads down onto the fixed bolt (natural "tightening a nut onto a stud"
 setup). Enable with `nut_driven: true` in the YAML or `--nut-driven` on CLI.
 ```bash
-python3 mkscrew.py --config examples/screws/m10.yaml --nut-driven -o m10.xml
+python3 mkscrew.py --config configs/screws/m10.yaml --nut-driven -o m10.xml
 ```
 In this mode the bolt's body carries `quat="0 0 1 0"` (180° about y) so its
 local +z (head direction) flips to world −z; the helix handedness is
@@ -298,7 +304,7 @@ xml = generate_screw_xml(
 
 # Config-driven
 import yaml
-cfg = yaml.safe_load(open('examples/screws/m10.yaml'))
+cfg = yaml.safe_load(open('configs/screws/m10.yaml'))
 xml = generate_screw_from_config(cfg)
 ```
 
@@ -374,3 +380,81 @@ print('advance:', d.qpos[m.jnt_qposadr[m.body_jntadr[bolt]] + 2] - z0)
   but loading time grows linearly.
 - No support yet for left-hand + right-hand mixed assemblies, tapered
   threads (NPT), or multi-material bolts (the whole bolt is one body).
+
+---
+
+# Gears: `mkgear.py`
+
+`mkgear.py` makes a contact-driven spur gear scene from a generated involute-
+style tooth outline. Each gear has one clean visual mesh, while collision is
+decomposed into hidden convex triangular-prism mesh geoms that match the same
+outline. There is no colliding root disk filling the valleys and no rectangular
+tooth blocks.
+
+## Quick start
+
+```bash
+python3 mkgear.py -o gear_pair.xml
+python3 mkgear.py --single --teeth 24 -o gear.xml
+python3 mkgear.py --config configs/gears/spur_pair.yaml -o gear_pair.xml
+```
+
+Included configs:
+
+- `configs/gears/spur_pair.yaml` — default 18:24 pair
+- `configs/gears/equal_20t.yaml` — equal 20:20 pair
+- `configs/gears/reduction_12_36.yaml` — 3:1 reduction
+- `configs/gears/overdrive_32_16.yaml` — 2:1 overdrive
+- `configs/gears/fine_pitch_32_48.yaml` — fine-pitch higher tooth counts
+- `configs/gears/compact_coarse_10_20.yaml` — compact coarse pair
+- `configs/gears/single_24t.yaml` — single centered gear
+
+Viewer groups:
+
+- Group `2`: clean visual gear meshes.
+- Group `3`: translucent cyan collision wedges. This group is hidden by
+  MuJoCo's default viewer options, so press `3` to show/hide collision.
+
+## Config schema
+
+```yaml
+module:                 0.003     # pitch diameter / teeth, meters
+face_width:             0.008
+pressure_angle_degrees: 20.0
+addendum_coeff:         1.00
+dedendum_coeff:         1.25
+tooth_width_ratio:      0.48      # tooth thickness at pitch circle / circular pitch
+backlash:               0.00015   # extra center spacing
+
+gear_a:
+  teeth: 18
+
+gear_b:
+  include: true
+  teeth: 24
+
+support:
+  include_axles: true
+
+actuator:
+  include: true              # motor on gear_a_hinge
+  gear: 0.02
+```
+
+## Library API
+
+```python
+from mkgear import generate_gear_xml, generate_gear_from_config
+
+xml = generate_gear_xml(teeth=18, gear_b_teeth=24, module=0.003)
+```
+
+## Limitations
+
+- The tooth outline is an involute-style approximation with an unfilleted
+  root, not a manufacturing-grade CAD gear.
+- Gear centers are hinge-constrained in the generated scene. Torque transfer
+  comes from contact between convex tooth/profile wedges; no equality gear
+  constraint is inserted.
+- Collision mesh count scales with tooth count and outline sampling. The
+  default example is still small enough to load and step quickly.
