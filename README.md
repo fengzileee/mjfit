@@ -179,7 +179,10 @@ xml = generate_from_config(cfg_dict)
 4. **Clearance** is true inward polygon offset (miter joins). Every edge of
    the peg sits at exactly `clearance` perpendicular distance from the
    corresponding hole edge — constant around the perimeter regardless of
-   shape.
+   shape. The built-in `--shape circle` is the exception: its peg is an
+   analytic cylinder of radius `hole_size - clearance`, so the hole n-gon
+   circumscribes `hole_size`. The gap is exactly `clearance` at the flats and
+   grows to `clearance + hole_size * (1/cos(π/n) - 1)` at the n-gon corners.
 
 ## Contact parameters
 

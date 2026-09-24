@@ -684,8 +684,14 @@ def generate_xml(
     else:
         if shape not in SHAPES:
             raise ValueError(f"Unknown shape {shape!r}. Known: {sorted(SHAPES)}")
-        hole = np.asarray(SHAPES[shape](hole_size, n_circle) if shape == 'circle'
-                          else SHAPES[shape](hole_size))
+        if shape == 'circle':
+            # The peg is an analytic cylinder of radius hole_size - clearance,
+            # so the n-gon must circumscribe radius hole_size: its flats then
+            # sit exactly at hole_size (gap = clearance) instead of cutting a
+            # chord of depth hole_size * (1 - cos(pi/n)) into the clearance.
+            hole = _circle(hole_size / np.cos(np.pi / n_circle), n_circle)
+        else:
+            hole = np.asarray(SHAPES[shape](hole_size))
         peg = _offset_polygon_inward(hole, peg_clearance)
 
     plate_half = plate_size / 2
