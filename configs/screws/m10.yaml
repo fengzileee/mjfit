@@ -28,7 +28,7 @@ nut:
   height:              0.008      # 8 mm thick hex nut
   across_flats:        0.016      # 16 mm
   shell_shape:         hex
-  density:             10
+  density:             7800       # steel (kg/m^3)
 
 include_floor:    true
 free_bolt:        true

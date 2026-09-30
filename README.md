@@ -336,9 +336,12 @@ pitch:           0.0015     # P (axial distance per turn per start)
 thread_length:   0.020      # axial length of bolt threads
 n_starts:        1          # multi-start threads: lead = n_starts × pitch
 segments_per_turn: 24       # angular segments per helix revolution
-thread_form:     iso        # ISO 60° (only form in v1)
+thread_form:     iso        # iso, trapezoidal, acme, square, buttress, wire, custom
+thread_params: {}           # overrides of the form's defaults (see Thread forms)
 handedness:      right      # 'right' or 'left'
-clearance:       0.00010    # flank-normal gap between bolt and nut threads
+clearance:       0.00010    # gap between facing flanks (along their normal)
+seam_relief:     0.0        # dip teeth at wedge seams (m); see How it works
+thread_chamfer:  0.0        # chamfer the thread ends over this axial length (m)
 
 bolt:
   shank_length:  0.008      # unthreaded shank above the thread
@@ -355,6 +358,102 @@ nut:
 
 Every length scales uniformly with `scale` (and `--scale` on the CLI).
 
+## Thread forms
+
+A thread is a tooth profile swept along a helix. Each part's tooth is any
+simple polygon in the meridian plane:
+- **Convex teeth** (V, trapezoid, square, buttress, round wire, dovetail)
+  are swept as they are.
+- **Non-convex teeth** (hooks, T-slots, barbs) are first cut into convex
+  pieces, and each piece is swept as its own wedges.
+
+`thread_form` picks one, and `thread_params` overrides its defaults. On the CLI, repeat `--thread-param KEY=VALUE`, where
+VALUE is a Python literal (`--thread-param "flank_angles=[30,3]"`).
+
+| `thread_form` | Profile | Defaults (P = pitch) |
+|---|---|---|
+| `iso` | ISO 68-1 metric (and UTS): 60° V with flats | depth 5√3/16·P, crest flat P/8 |
+| `trapezoidal` | ISO 2904 Tr: 30° | depth P/2, crest flat 0.366 P |
+| `acme` | ACME: 29° | depth P/2, crest flat 0.3707 P |
+| `square` | Square: 0° flanks | depth P/2, crest flat P/2 |
+| `buttress` | ANSI 7°/45° | depth 0.6 P, crest flat 0.1631 P |
+| `wire` | Round wire wound on each part (FurnitureBench) | wire Ø P/√3, tight |
+| `custom` | Your own teeth, convex or hooked | — |
+
+- **Trapezoid family** (`iso` to `buttress`). `thread_params` can set:
+  - `flank_angles`: the bolt tooth's lower and upper flank, in degrees from
+    the radial plane. The upper flank faces the bolt head, so a buttress's
+    steep 7° flank carries a bolt in tension. Negative angles undercut the
+    flanks, giving a dovetail: both teeth widen away from their base and stay
+    convex.
+  - `depth` and `crest_flat`, both in pitches. The root gap is whatever is
+    left of the pitch.
+- **`wire`**. `thread_params` can set:
+  - `wire_diameter`;
+  - `nut_wire_offset`: how far out the nut's wire centre sits from the
+    bolt's;
+  - `bore_diameter`: the nut root;
+  - `wire_segments`: sides of the polygon inscribed in the wire's section,
+    16 by default.
+
+  The bolt's wire is centred on its core. The nut's wire sits half a pitch
+  along. The default is the tight form: wire Ø P/√3, at the offset where the
+  wires touch at zero clearance.
+- **`custom`**: give `bolt_tooth` and `nut_tooth` as lists of (r, u) points
+  in metres, in one shared phase: u is the axial position along the helix,
+  mod P. Also give `core_diameter` and `root_diameter`. Each tooth is
+  clipped at its base line and must be a simple polygon.
+  - **Non-convex teeth, clearance:** every edge moves back c/2 at once, with
+    mitred corners. At a reflex corner that only leaves more clear. The
+    offset is rejected if it would make the tooth cross itself.
+  - **Non-convex teeth, pieces:** the tooth is then cut into convex pieces,
+    by ear-clipping and merging triangles back while they stay convex
+    (Hertel–Mehlhorn).
+  - **Chord and twist corrections** move the whole tooth's edges before the
+    cut, so they come out right at the reflex corners. The cuts lie inside
+    the tooth and never move.
+
+Clearance `c` works the same way for every form: every exposed edge of both
+teeth moves back c/2 along its normal, and the nut root moves out by c/2.
+Facing surfaces are then c apart; for `iso` that is exactly the standard's
+rule. The tests check that the wedges of every form stay inside its exact
+swept teeth, for multi-start and left-hand threads too, and that every form
+starts interlocked in both scene layouts.
+
+How far this stretches: `benchmark/thread/wacky.py` has nine designs, and
+`thread_wacky.mp4` shows each screwed down under a nut runner:
+- a sawtooth, a knife-edge V and an auger;
+- a six-start thread steep enough to back-drive;
+- left-hand double- and triple-start threads;
+- a loose coil spring, and custom pentagon-and-dart teeth;
+- a fine M10×0.5.
+
+`benchmark/thread/wacky.py` also has four undercut designs in
+`thread_undercut.mp4`:
+- a 15° dovetail;
+- interlocking L-hooks;
+- T's in inverted-T slots;
+- barbed arrowheads, where the nut fills the pockets under the barbs.
+
+They are chamfered 45° at the ends (`thread_chamfer`, item 10 of How it
+works). The tests check that their wedges stay inside the exact teeth and cover
+them.
+
+Not expressible yet:
+- tapered threads;
+- variable pitch;
+- non-round cores.
+
+`configs/screws/furniture_bench_leg.yaml` is the FurnitureBench square-table
+leg in its tabletop hole, measured from the FurnitureBench meshes:
+- **Thread:** a round-wire thread, pitch 9.375 mm, single start,
+  right-handed, with a Ø4.36 mm wire on both parts.
+- **Leg:** a Ø20 mm stud with the wire centred on its surface.
+- **Hole:** a Ø25 mm bore, with the wire centred 3.1 mm further out than the
+  stud's.
+- **Fit:** loose, as 3D-printed parts are: about ±1.6 mm of axial play at
+  zero clearance.
+
 ## Library API
 
 ```python
@@ -365,6 +464,9 @@ xml = generate_screw_xml(
     major_diameter=0.010, pitch=0.0015, thread_length=0.020,
     clearance=1e-4, bolt_head_shape='hex', nut_shell_shape='hex',
 )
+# Another form, with overrides
+xml = generate_screw_xml(thread_form='buttress',
+                         thread_params={'flank_angles': (30, 3), 'depth': 0.75})
 
 # Config-driven
 import yaml
@@ -374,49 +476,119 @@ xml = generate_screw_from_config(cfg)
 
 ## How it works
 
-1. **Thread profile** (meridian plane): ISO 60°-angle truncated trapezoid,
-   parameterized by pitch P. External thread: base at minor radius r_min,
-   crest at major radius r_max. Internal thread: same shape, inverted
-   radially (base at r_max, tip at r_min).
-2. **Clearance**: reduces thread crest radius by `clearance/2` on both bolt
-   and nut, preserving the 60° flank angle. Resulting flank-to-flank
-   perpendicular gap ≈ clearance.
-3. **Axial offset for interlock**: the nut's thread is axially shifted by
-   `−7P/16` from the bolt's so the nut's falling flank coincides with the
-   bolt's rising flank (zero-clearance case). This is what makes the two
-   threads mesh rather than collide.
+1. **Thread profiles** (meridian plane): a convex tooth per part, in (r, u)
+   with u the axial position along the helix (see Thread forms). For ISO
+   68-1 the bolt tooth has a P/8 crest at the major radius and leaves a P/4
+   root at the minor radius. The nut tooth is the space between basic bolt
+   teeth, not a mirror of the bolt tooth: its tip at the minor radius is P/4
+   wide and its base at the major radius 7P/8.
+2. **Clearance** `c`: every exposed edge of both teeth moves back c/2 along
+   its normal (the flanks, the bolt crest and the nut tip), and the nut root
+   moves out c/2. With the nut on the pitch grid (see 3), facing flanks are
+   exactly `c` apart on both sides, the bolt crest clears the nut root by
+   `c`, and the nut tip clears the bolt core by c/2. For ISO, axial play is
+   ±c/cos 30° = ±2c/√3 and radial play is c/2.
+3. **Thread phase**: both teeth are defined in one phase, the bolt's, with
+   the nut tooth in the bolt's gaps. For ISO that shifts the nut's thread
+   `−7P/16`. Frames a whole number of pitches apart then interlock with the
+   clearance centred, and the bolt-driven layout puts the bolt on that grid.
+   The nut-driven layout flips the bolt (a half turn about y), which mirrors
+   its tooth in u:
+   - a symmetric tooth only moves the nut's phase to bolt origin −
+     lead/2 − 2u_c, mod P, where u_c is the tooth centre (for single-start
+     ISO, +P/4);
+   - an asymmetric tooth (buttress) gets a mirrored nut tooth, as a nut
+     turned over with its bolt, at bolt origin − lead/2.
 4. **Wedge construction**: for each angular segment [θᵢ, θᵢ₊₁] of each
    turn of each start, the thread profile is swept through Δθ with the
    appropriate helical axial advance (`Δθ · lead / 2π`). Result: an 8-vertex
    convex polyhedron, emitted as `<mesh vertex="..."/>` so MuJoCo convex-
-   hulls it.
-5. **Bolt assembly**: one analytical `<geom type="cylinder">` at r_min (the
+   hulls it. Each wedge is clipped exactly to the thread length, so no tooth
+   sticks out past the bolt tip or the nut faces. The turns start from the
+   one below turn 0, so the partial first turn at each z = 0 face (the
+   bolt's tip) is there too.
+5. **Discretization is one-sided**: a wedge's faces are chords of the
+   helical surfaces. On the bolt they fall inside the true thread. On the
+   nut they would bulge toward the bolt in two ways, and both are removed:
+   - the arc sag r(1 − cos(Δθ/2)) (36 µm at M10, 24 segments), by pushing
+     the wedge out radially by 1/cos(Δθ/2);
+   - the helicoid twist of each flank quad, lead·Δθ·(r₁ − r₂)/(4π(r₁ + r₂))
+     axially (2.6 µm), by moving both flanks back by that amount.
+
+   On a bolt flank that widens toward the core (ISO, trapezoidal) the chord
+   sag outweighs the twist. On steep flanks (square, the sides of a round
+   wire) it doesn't, and those edges move back too. These formulas are
+   first order, so the generator then measures one wedge's hull facets
+   (edges and interiors, zooming in on each facet's peak) against the exact
+   tooth and moves back any edge that still sticks out (by a few nm at
+   most). All wedges are congruent, so one is enough.
+
+   Fewer segments per turn therefore only add play; they never add
+   interference. `tests/test_mkscrew.py` checks the wedges against the exact
+   helical parts, for every thread form.
+6. **Bolt assembly**: one analytical `<geom type="cylinder">` at r_min (the
    core) plus the thread wedges. Hex head is a 6-gon convex prism; cylinder
    head is another primitive cylinder.
-6. **Nut assembly**: annular shell decomposed into sectors (cylindrical
-   nut) or via ear-clipping (hex nut — hex-minus-bore). Thread wedges point
-   inward. Shell inner radius is inflated so chord midpoints sit exactly
-   at `r_max + clearance/2` — ensures the flat chord doesn't intrude into
-   the thread engagement zone.
+7. **Nut assembly**: annular shell decomposed into sectors (cylindrical
+   nut) or via ear-clipping (hex nut — hex-minus-bore). Both bore polygons
+   are circumscribed so their chords sit at or outside `r_max + c/2`. Thread
+   wedges point inward.
+8. **Collisions**: every bolt geom can touch every nut geom, so a nut tooth
+   tip under radial load stops on the bolt core as it should.
+9. **Seam relief** (`seam_relief`, metres; off by default): MuJoCo collides
+   every pair of convex pieces separately. A tooth sliding across the seam
+   into the next wedge first overlaps it in a thin sliver at its end face.
+   The shortest way out is back through that face, so the contact pushes
+   around the axis and stops a spinning nut dead (an "internal edge").
+   `seam_relief` dips the teeth by that depth at every seam, ramping back up
+   at about 1:20, so seams become gentle ramps. It only removes material (the
+   internal-thread corrections cover the new chords), and it slightly reduces
+   play error, because full-height chords get shorter. About 5 µm suits
+   MuJoCo's default contact softness. It raises a frictionless M10 nut's
+   spin-down from 69 / 41 / 30 % of the exact descent to 92 / 87 / 71 % at
+   24 / 48 / 96 segments per turn (see `benchmark/thread/README.md`).
+10. **Chamfer** (`thread_chamfer`, metres; off by default): machined bolts
+    have chamfered ends, and so can these.
+    - **Bolt:** a cone cuts the thread back from the core radius at the end
+      face to the crest `thread_chamfer` in. That is 45° when
+      `thread_chamfer` is the thread depth. It applies at the tip, and at
+      the far end too on a bare threaded rod (no shank or head).
+    - **Nut:** countersunk the same way at both faces, from its bore to its
+      tooth tips.
+    - **What it's for:** a lead-in for the nut. It also removes the thin
+      blade that an undercut tooth (a dovetail) leaves when the thread is
+      cut off flat, because the crest runs on past the root.
+    - **Only removes material:** a wedge can't be cut by a curved cone
+      exactly. Each bolt wedge is cut by the plane through the cone's surface
+      lines at the wedge's two edges, which lies inside the cone. Each nut
+      wedge is cut by the plane tangent to its countersink, outside which
+      the countersink never reaches. On the CLI: `--thread-chamfer`
+      (and `--seam-relief`).
 
 ## Clearance and friction tuning
 
-Threading efficiency (Δz per revolution relative to nominal P) depends on
-clearance, spin rate, and friction:
+Threading efficiency (Δz per revolution relative to P) for the verification
+snippet below: bolt spun at −15 rad/s for 2 s, M10, 24 segments per turn.
 
-- **Tight clearance** (c / P < 5%) produces many simultaneous contacts and
-  can cause the contact solver to under-resolve, dragging efficiency toward
-  ~50%. Loosen to 7–10% of pitch for clean threading.
+| friction, condim | c = 100 µm | c = 20 µm |
+|---|---|---|
+| 1.0, 4 (generator default) | 75 % | 34 % |
+| 0.3, 3 (example configs) | 94 % | 89 % |
+| 0.1, 3 | 98 % | 97 % |
+| 0 (frictionless), 1 | 98 % | 98 % |
+
+The loss comes from friction, not from the geometry. Driving the rotation by
+velocity against a self-locking thread (μ above tan of the 3° lead angle)
+pushes the soft contacts about 40 µm deep, until the flanks slip. For
+spun-in threading, use friction 0.1–0.3 with condim 3.
+
 - **Slow rotation** makes efficiency dip (solver play at low rates — the
   bolt "slips through" the flank-normal clearance). Faster spin pins the
   bolt to a consistent flank contact.
-- **Segments per turn**: too coarse (≤12) produces visible chord error and
-  catching at segment seams. 24 is a good default; bump to 32–48 for tight
-  simulations.
-
-For M10 at clearance=100 µm, segments_per_turn=24, spin=−15 rad/s: the
-generator reliably produces ≥95% threading efficiency (Δz/rev vs. nominal
-pitch) on the provided example configs.
+- **Segments per turn** trade speed for play: the discretization only
+  loosens the nut, by up to r(1/cos(π/n) − 1) radially plus the twist
+  allowance above. 24 is a good default; use 48–96 for clearances of tens
+  of µm.
 
 ## Verification
 
@@ -437,13 +609,19 @@ print('advance:', d.qpos[m.jnt_qposadr[m.body_jntadr[bolt]] + 2] - z0)
 
 ## Limitations
 
-- ISO metric only in v1. Acme/trapezoidal, UTS imperial, buttress are
-  profile-function plug-ins (edit `_iso_thread_profile_external` to add).
+- Teeth must be simple polygons in the meridian plane. Non-convex ones are
+  cut into convex pieces, one set of wedges each, so a hooked tooth costs
+  two or three times the geoms. A round wire's section is an inscribed
+  polygon: it only rounds the wire down, by up to ρ(1 − cos(π/n)).
+- The benchmark (`benchmark/thread/`) takes any form, and so does its
+  analytic SDF plugin. `benchmark/thread/forms.py` has five M10-sized forms
+  and the FurnitureBench leg; see "Thread forms" in its README.
 - Mesh count scales with (thread_length / pitch) × segments_per_turn. M10
   with 20 mm thread and 24 segs/turn → ~500 meshes; MuJoCo handles it fine
   but loading time grows linearly.
-- No support yet for left-hand + right-hand mixed assemblies, tapered
-  threads (NPT), or multi-material bolts (the whole bolt is one body).
+- No support yet for tapered threads (NPT), variable pitch, left-hand +
+  right-hand mixed assemblies, or multi-material bolts (the whole bolt is
+  one body).
 
 ---
 

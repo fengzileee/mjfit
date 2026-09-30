@@ -10,3 +10,7 @@ venv/
 
 examples/m6
 examples/m10
+
+# benchmark outputs
+benchmark/results/
+benchmark/cache/
