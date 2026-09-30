@@ -108,9 +108,51 @@ islands:                            # optional list
 | `regular_ngon` | `n`, `circumradius`                              |
 | `star`         | `n_points`, `outer_radius`, `inner_radius`       |
 | `polygon`      | `vertices: [[x, y], ...]`                        |
+| `bezier_polygon` | convex control `vertices`, `corner_rounding` (scalar or one per corner, 0–0.5), `max_chord_error` (meters, default 0.0001) |
 | `from_csv`     | `path` (relative to the config file, or absolute) |
 
 Every primitive accepts `center` and `rotate`. Islands use the same schema.
+
+### Convex insertion, independent handle, and outer plate
+
+`bezier_polygon` replaces each rounded control corner with a quadratic Bezier
+curve. A rounding fraction of `0` leaves that corner sharp; `0.5` joins adjacent
+curves at their common edge midpoint. Mixed fractions combine straight and curved
+sections. The curves are tessellated into convex native MuJoCo prism meshes with
+a conservative Euclidean chord-error bound. Fractions correspond to the supplied
+vertex order, including clockwise input; output is counterclockwise.
+
+Configs accept either `hole` (derive the peg by inward clearance) or `peg`
+(derive the aperture by outward clearance). Optional `handle` and `plate` use
+the same primitive schema. The handle must contain the insertion outline; an
+explicit convex outer plate must contain the aperture and handle. No outline
+is automatically resized to make these constraints pass.
+
+```bash
+python3 mkpeg.py --config configs/connectors/convex_bezier_handle.yaml -o curved.xml
+```
+
+Additional settings for this example are:
+
+- `peg_length` is the lower insertion-section height A; `handle_height` is B.
+- `peg_mass_kg` is the **total** mass of A plus B. Collision-geom masses share
+  one material density, weighted by each section's physical volume. This overrides
+  `peg_density` and stays fixed under `scale`. Omit it for the legacy density rule.
+- `plate_min_rim_m: 0.005` requires at least 5 mm of perpendicular clearance
+  from every outer-plate edge to both the aperture and handle. It has no maximum
+  rim and requires an explicit `plate`. The default is zero.
+- `bottom_stop_thickness: 0.002` adds a 2 mm floor below the hole following
+  the exact outer-plate outline. Default zero retains the historical open hole.
+  `include_floor: false` omits the unrelated infinite world ground plane.
+- `center_shapes: false` preserves every supplied coordinate and disables the
+  default lateral peg spawn offset. The default `true` applies one shared source
+  translation to the hole, peg, handle, and explicit plate, preserving their
+  relative placement. It never independently recenters Y or Z.
+
+`scale` multiplies all lengths, including clearance, minimum rim, and chord-error
+tolerance. Pass already-resolved physical polygons with `scale=1` to preserve
+an experiment's physical settings. The new explicit-geometry paths serialize
+coordinates with 17 significant digits; legacy calls retain their output format.
 
 ### Example: USB-A
 
@@ -159,7 +201,21 @@ xml = generate_xml(
 
 # From a config dict (same schema as the YAML files)
 xml = generate_from_config(cfg_dict)
+
+# Export an experiment's exact resolved aperture, containing Y, and outer Z.
+# X is derived from the aperture with the same physical inward clearance.
+xml = generate_xml(
+    hole_poly=aperture, handle_poly=Y, plate_poly=Z,
+    peg_clearance=0.001, peg_length=A, handle_height=B,
+    peg_mass_kg=0.55, plate_min_rim_m=0.005,
+    bottom_stop_thickness=0.002, center_shapes=False, include_floor=False,
+)
 ```
+
+CSV equivalents are `--handle-csv`, `--plate-csv`, `--peg-mass-kg`,
+`--plate-min-rim-m`, `--bottom-stop-thickness`, and `--preserve-origin`.
+The `bezier_polygon(vertices, corner_rounding, max_chord_error)` library helper
+also returns the tessellated outline directly, without translating or scaling it.
 
 ## How it works
 
@@ -214,10 +270,15 @@ For free-spinning torsional contact issues, bump to `condim=6`.
   moves ~3.24 mm inward. If that's unacceptable, use a smaller clearance.
 - **Islands must be non-overlapping**. The generator doesn't check;
   overlapping islands produce undefined geometry.
-- **Plate is a square**. Non-square plates are a 10-line edit (just change
-  the outer polygon in `_decompose_plate_general` to your shape).
+- **Explicit outer plates must be convex**. Rotated/asymmetric rectangles and
+  convex Bezier outlines are supported; nonconvex outer plates are rejected.
 
 ## Directory layout
+
+The convex/Bezier regression tests use `pytest` in addition to the runtime
+dependencies. Run `python -m pytest tests/test_mkpeg_convex.py` to check native
+mesh loading, containment/clearance, shared frames, total mass, OBJ export,
+clockwise corner parameters, and unchanged legacy output.
 
 ```
 mkpeg.py          # peg-in-hole generator (library + CLI)

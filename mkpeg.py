@@ -18,6 +18,7 @@ Library:
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -158,6 +159,74 @@ def _signed_area(poly: np.ndarray) -> float:
 
 def _ensure_ccw(poly: np.ndarray) -> np.ndarray:
     return poly[::-1].copy() if _signed_area(poly) < 0 else poly
+
+
+def _convex_polygon(vertices, name: str) -> np.ndarray:
+    """Validate a finite convex outline, preserving its supplied coordinates."""
+    poly = np.asarray(vertices, dtype=float)
+    if poly.ndim != 2 or poly.shape[1] != 2 or len(poly) < 3 or not np.isfinite(poly).all():
+        raise ValueError(f"{name} needs at least three finite [x,y] vertices.")
+    poly = _ensure_ccw(poly)
+    edges = np.roll(poly, -1, axis=0) - poly
+    lengths = np.linalg.norm(edges, axis=1)
+    if np.any(lengths <= 1e-12) or _signed_area(poly) <= 1e-12:
+        raise ValueError(f"{name} must have positive area and nonzero edges.")
+    normals = np.column_stack((-edges[:, 1], edges[:, 0])) / lengths[:, None]
+    distances = np.einsum('ej,evj->ev', normals, poly[None] - poly[:, None])
+    if np.any(distances < -1e-10):
+        raise ValueError(f"{name} must be a simple convex polygon.")
+    return poly
+
+
+def _require_containment(outer: np.ndarray, inner: np.ndarray,
+                         margin: float, name: str) -> None:
+    edges = np.roll(outer, -1, axis=0) - outer
+    normals = np.column_stack((-edges[:, 1], edges[:, 0]))
+    normals /= np.linalg.norm(normals, axis=1)[:, None]
+    distances = np.einsum('ej,evj->ev', normals, inner[None] - outer[:, None])
+    if np.min(distances) < margin - 1e-10:
+        raise ValueError(f"{name} does not contain its inner outline with {margin:g} m rim.")
+
+
+def bezier_polygon(vertices, corner_rounding=0.5,
+                   max_chord_error: float = 0.0001) -> np.ndarray:
+    """Round convex control corners with quadratic Beziers, then tessellate.
+
+    ``corner_rounding`` is one fraction or one per vertex in [0, 0.5]. Zero
+    retains a sharp corner; 0.5 joins neighboring curves at edge midpoints.
+    The Euclidean curve-to-chord error is at most ``max_chord_error`` meters.
+    Control points and output share a frame; no centering/scaling is performed.
+    """
+    original = np.asarray(vertices, dtype=float)
+    control = _convex_polygon(original, 'Bezier control polygon')
+    alphas = np.asarray(corner_rounding, dtype=float)
+    if alphas.ndim == 0:
+        alphas = np.full(len(control), float(alphas))
+    if alphas.shape != (len(control),) or not np.isfinite(alphas).all() or np.any((alphas < 0) | (alphas > 0.5)):
+        raise ValueError("corner_rounding needs fractions in [0, 0.5], one per vertex.")
+    if _signed_area(original) < 0:
+        alphas = alphas[::-1]
+    if not math.isfinite(max_chord_error) or max_chord_error <= 0:
+        raise ValueError("max_chord_error must be finite and positive.")
+    points = []
+    for index, (vertex, alpha) in enumerate(zip(control, alphas)):
+        if alpha == 0:
+            candidates = [vertex]
+        else:
+            entry = vertex + alpha * (control[index - 1] - vertex)
+            exit = vertex + alpha * (control[(index + 1) % len(control)] - vertex)
+            curvature = np.linalg.norm(entry - 2 * vertex + exit)
+            segments = max(1, math.ceil(math.sqrt(curvature / (4 * max_chord_error))))
+            candidates = [
+                (1 - t)**2 * entry + 2 * t * (1 - t) * vertex + t**2 * exit
+                for t in np.linspace(0.0, 1.0, segments + 1)
+            ]
+        for point in candidates:
+            if not points or np.linalg.norm(point - points[-1]) > 1e-12:
+                points.append(point)
+    if np.linalg.norm(points[0] - points[-1]) <= 1e-12:
+        points.pop()
+    return _convex_polygon(points, 'Tessellated Bezier polygon')
 
 
 def _is_star_shaped_from(poly: np.ndarray, point: np.ndarray, tol: float = 1e-9) -> bool:
@@ -446,6 +515,9 @@ def _resolve_shape(cfg: dict, config_dir: Path | None = None,
         verts = np.column_stack([rr * np.cos(a), rr * np.sin(a)])
     elif t == 'polygon':
         verts = np.asarray(cfg['vertices'], dtype=float)
+    elif t == 'bezier_polygon':
+        verts = bezier_polygon(cfg['vertices'], cfg.get('corner_rounding', 0.5),
+                               cfg.get('max_chord_error', 0.0001))
     elif t == 'from_csv':
         p = Path(cfg['path'])
         if not p.is_absolute() and config_dir is not None:
@@ -479,21 +551,35 @@ def generate_from_config(config: dict, config_dir: Path | None = None,
     """
     if scale is None:
         scale = float(config.get('scale', 1.0))
-    hole = _resolve_shape(config['hole'], config_dir, scale=scale)
+    if ('hole' in config) == ('peg' in config):
+        raise ValueError("Config requires exactly one of hole or peg.")
+    hole = _resolve_shape(config['hole'], config_dir, scale=scale) if 'hole' in config else None
+    peg = _resolve_shape(config['peg'], config_dir, scale=scale) if 'peg' in config else None
+    handle = _resolve_shape(config['handle'], config_dir, scale=scale) if 'handle' in config else None
+    plate = _resolve_shape(config['plate'], config_dir, scale=scale) if 'plate' in config else None
     island_cfgs = config.get('islands', []) or []
     islands = [_resolve_shape(c, config_dir, scale=scale) for c in island_cfgs]
+    if islands and hole is None:
+        raise ValueError("Islands require a hole shape, not a peg shape.")
     return generate_xml(
         hole_poly=hole,
+        peg_poly=peg,
+        handle_poly=handle,
+        plate_poly=plate,
         hole_island_polys=islands or None,
         peg_clearance=config['clearance'] * scale,
-        plate_size=config['plate_size'] * scale,
+        plate_size=config.get('plate_size', 0.2) * scale,
         plate_thickness=config['plate_thickness'] * scale,
         peg_length=config['peg_length'] * scale,
         peg_height=config.get('peg_height', 0.1) * scale,
         peg_density=config.get('peg_density', 1000.0),
+        peg_mass_kg=config.get('peg_mass_kg'),
         plate_density=config.get('plate_density', 1000.0),
         handle_height=config.get('handle_height', 0.0) * scale,
         handle_margin=config.get('handle_margin', 0.003) * scale,
+        plate_min_rim_m=config.get('plate_min_rim_m', 0.0) * scale,
+        bottom_stop_thickness=config.get('bottom_stop_thickness', 0.0) * scale,
+        center_shapes=config.get('center_shapes', True),
         include_peg=config.get('include_peg', True),
         include_floor=config.get('include_floor', True),
         mesh_only=config.get('mesh_only', False),
@@ -522,6 +608,7 @@ def _load_config(path: Path) -> dict:
 def _write_prism_obj(
     path: Path,
     solids: list[tuple[np.ndarray, list, float, float]],
+    *, precise: bool = False,
 ) -> None:
     """Write one or more thickness-extruded polygons as a watertight OBJ.
 
@@ -543,7 +630,8 @@ def _write_prism_obj(
 
     def add_vert(x: float, y: float, z: float) -> int:
         nonlocal n_verts
-        lines.append(f"v {x:.6f} {y:.6f} {z:.6f}")
+        lines.append(f"v {x:.17g} {y:.17g} {z:.17g}" if precise
+                     else f"v {x:.6f} {y:.6f} {z:.6f}")
         n_verts += 1
         return n_verts
 
@@ -589,7 +677,7 @@ def _write_prism_obj(
 
 
 def _extrude_mesh_xml(name: str, poly2d: np.ndarray, thickness: float,
-                      mesh_dir: Path | None = None) -> str:
+                      mesh_dir: Path | None = None, *, precise: bool = False) -> str:
     """Return MJCF `<mesh>` element for an extruded prism.
 
     With `mesh_dir`: writes `{name}.obj` and emits a `file="..."` reference
@@ -598,14 +686,14 @@ def _extrude_mesh_xml(name: str, poly2d: np.ndarray, thickness: float,
     """
     if mesh_dir is not None:
         _write_prism_obj(mesh_dir / f'{name}.obj',
-                         [(poly2d, [], thickness, 0.0)])
+                         [(poly2d, [], thickness, 0.0)], precise=precise)
         return f'    <mesh name="{name}" file="{name}.obj"/>'
     verts = []
     for v in poly2d:
         verts.extend([v[0], v[1], -thickness / 2])
     for v in poly2d:
         verts.extend([v[0], v[1],  thickness / 2])
-    vstr = ' '.join(f'{x:.6f}' for x in verts)
+    vstr = ' '.join(f'{x:.17g}' if precise else f'{x:.6f}' for x in verts)
     return f'    <mesh name="{name}" vertex="{vstr}"/>'
 
 
@@ -630,6 +718,12 @@ def generate_xml(
     peg_poly: np.ndarray | None = None,
     hole_poly: np.ndarray | None = None,
     hole_island_polys: list | np.ndarray | None = None,
+    handle_poly: np.ndarray | None = None,
+    plate_poly: np.ndarray | None = None,
+    peg_mass_kg: float | None = None,
+    plate_min_rim_m: float = 0.0,
+    bottom_stop_thickness: float = 0.0,
+    center_shapes: bool = True,
 ) -> str:
     """Build MJCF for peg-in-hole.
 
@@ -646,13 +740,42 @@ def generate_xml(
     peg_clearance. A single ndarray is accepted as syntactic sugar for a
     one-island list.
 
-    Custom polygons are auto-centered on their hole's vertex centroid and
+    Custom polygons are auto-centered on the supplied source's vertex mean and
     auto-reoriented to CCW. Islands shift with the parent hole to preserve
-    relative positioning.
+    relative positioning. Explicit handle_poly and convex plate_poly use that
+    same translation. center_shapes=False preserves all input coordinates.
+    The explicit handle must contain the insertion outline; the plate must
+    contain the hole and handle with plate_min_rim_m perpendicular edge margin.
+    bottom_stop_thickness adds a floor following the plate's outer outline.
+    peg_mass_kg sets the TOTAL insertion-plus-handle mass, split by volume;
+    otherwise the historical peg_density behavior is retained.
     """
     islands: list[np.ndarray] = []
     peg_outer: np.ndarray | None = None
     peg_inners: list[np.ndarray] = []
+    precise = (handle_poly is not None or plate_poly is not None
+               or peg_mass_kg is not None or not center_shapes
+               or bottom_stop_thickness > 0)
+    if precise and (not math.isfinite(peg_clearance) or peg_clearance < 0):
+        raise ValueError("peg_clearance must be finite and nonnegative.")
+    if precise:
+        for name, value in (('peg_length', peg_length), ('plate_thickness', plate_thickness)):
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive.")
+        if not math.isfinite(handle_height) or handle_height < 0:
+            raise ValueError("handle_height must be finite and nonnegative.")
+        if handle_poly is None and handle_height > 0 and (not math.isfinite(handle_margin) or handle_margin < 0):
+            raise ValueError("Generated handle_margin must be finite and nonnegative.")
+    if peg_mass_kg is not None and (not math.isfinite(peg_mass_kg) or peg_mass_kg <= 0 or not include_peg):
+        raise ValueError("peg_mass_kg needs a finite positive total mass and include_peg=True.")
+    if not math.isfinite(plate_min_rim_m) or plate_min_rim_m < 0:
+        raise ValueError("plate_min_rim_m must be finite and nonnegative.")
+    if plate_min_rim_m > 0 and plate_poly is None:
+        raise ValueError("plate_min_rim_m requires an explicit plate_poly.")
+    if not math.isfinite(bottom_stop_thickness) or bottom_stop_thickness < 0:
+        raise ValueError("bottom_stop_thickness must be finite and nonnegative.")
+    if handle_poly is not None and (handle_height <= 0 or not include_peg):
+        raise ValueError("handle_poly requires positive handle_height and include_peg=True.")
 
     # Normalize islands input to a list of polygons.
     if hole_island_polys is None:
@@ -664,12 +787,13 @@ def generate_xml(
 
     if peg_poly is not None:
         p = _ensure_ccw(np.asarray(peg_poly, dtype=float))
-        peg = p - p.mean(axis=0)
+        shift = p.mean(axis=0) if center_shapes else np.zeros(2)
+        peg = p - shift
         hole = _offset_polygon_outward(peg, peg_clearance)
         shape = None
     elif hole_poly is not None:
         h = _ensure_ccw(np.asarray(hole_poly, dtype=float))
-        shift = h.mean(axis=0)
+        shift = h.mean(axis=0) if center_shapes else np.zeros(2)
         hole = h - shift
         if island_inputs:
             islands = [_ensure_ccw(np.asarray(isl, dtype=float)) - shift
@@ -682,6 +806,7 @@ def generate_xml(
             peg = _offset_polygon_inward(hole, peg_clearance)
         shape = None
     else:
+        shift = np.zeros(2)
         if shape not in SHAPES:
             raise ValueError(f"Unknown shape {shape!r}. Known: {sorted(SHAPES)}")
         if shape == 'circle':
@@ -694,12 +819,28 @@ def generate_xml(
             hole = np.asarray(SHAPES[shape](hole_size))
         peg = _offset_polygon_inward(hole, peg_clearance)
 
+    if precise and _is_convex_poly(hole):
+        hole = _convex_polygon(hole, 'Hole outline')
+        peg = _convex_polygon(peg, 'Offset insertion outline')
+        _require_containment(hole, peg, peg_clearance, 'Hole clearance')
+
+    # Custom handles on the built-in circle use its sampled convex prism so
+    # both supplied outlines retain their exact common insertion-plane frame.
+    if handle_poly is not None:
+        shape = None
     plate_half = plate_size / 2
-    if plate_half <= np.abs(hole).max() + 0.001:
+    plate_outline = np.array([[-plate_half, -plate_half], [plate_half, -plate_half],
+                              [plate_half, plate_half], [-plate_half, plate_half]])
+    if plate_poly is not None:
+        plate_outline = _convex_polygon(plate_poly, 'Plate outline') - shift
+        _require_containment(plate_outline, hole, max(plate_min_rim_m, 1e-9), 'Plate')
+    elif plate_half <= np.abs(hole).max() + 0.001:
         raise ValueError("plate_size must comfortably exceed the hole's bounding box.")
 
     # --- plate decomposition (always a polygon-with-hole around the opening)
-    if _is_star_shaped_from(hole, hole.mean(axis=0)):
+    if plate_poly is not None:
+        wedges = _decompose_annular(plate_outline, hole)
+    elif _is_star_shaped_from(hole, hole.mean(axis=0)):
         wedges = _decompose_plate(hole, plate_half)
     else:
         wedges = _decompose_plate_general(hole, plate_half)
@@ -756,7 +897,14 @@ def generate_xml(
     handle_outline: np.ndarray | None = None
     if handle_height > 0 and include_peg and shape != 'circle':
         base = peg_outer if peg_outer is not None else peg
-        handle_outline = _offset_polygon_outward(base, handle_margin)
+        if handle_poly is None:
+            handle_outline = _offset_polygon_outward(base, handle_margin)
+        else:
+            handle_outline = _convex_polygon(handle_poly, 'Handle outline') - shift
+            _require_containment(handle_outline, base, 0.0, 'Handle')
+        if precise and _is_convex_poly(base):
+            handle_outline = _convex_polygon(handle_outline, 'Handle outline')
+            _require_containment(handle_outline, base, 0.0, 'Handle')
         handle_z = (peg_length + handle_height) / 2
         if _is_convex_poly(handle_outline):
             handle_pieces = [handle_outline]
@@ -766,6 +914,31 @@ def generate_xml(
             handle_pieces = _ear_clip_simple(handle_outline)
         for i, piece in enumerate(handle_pieces):
             peg_geom_specs.append((f'handle_{i}', piece, handle_height, handle_z))
+
+    if plate_poly is not None and handle_height > 0 and include_peg:
+        checked_handle = handle_outline
+        if shape == 'circle':
+            # The built-in handle is an analytic cylinder, so test its exact
+            # support radius rather than an inscribed polygon approximation.
+            radius = hole_size - peg_clearance + handle_margin
+            _require_containment(plate_outline, np.zeros((1, 2)),
+                                 radius + plate_min_rim_m, 'Plate around handle')
+        else:
+            _require_containment(plate_outline, checked_handle, plate_min_rim_m, 'Plate around handle')
+
+    masses = {}
+    if peg_mass_kg is not None:
+        if shape == 'circle':
+            volumes = {'cylinder': np.pi * (hole_size - peg_clearance)**2 * peg_length}
+            if handle_height > 0:
+                volumes['handle_cylinder'] = np.pi * (hole_size - peg_clearance + handle_margin)**2 * handle_height
+        else:
+            volumes = {name: abs(_signed_area(poly)) * thick
+                       for name, poly, thick, _ in peg_geom_specs}
+        if any(volume <= 0 for volume in volumes.values()):
+            raise ValueError("Total mass requires positive insertion/handle volumes.")
+        total_volume = sum(volumes.values())
+        masses = {name: peg_mass_kg * volume / total_volume for name, volume in volumes.items()}
 
     export_visuals = mesh_dir is not None
     # Peg visual mesh applies only when peg is actually a mesh (not the
@@ -779,16 +952,10 @@ def generate_xml(
     if export_visuals:
         # Build the plate visual from the ORIGINAL outer/hole boundaries so
         # the OBJ has no interior seams (wedge-concat produced z-fighting).
-        plate_square = np.array([
-            [-plate_half, -plate_half],
-            [ plate_half, -plate_half],
-            [ plate_half,  plate_half],
-            [-plate_half,  plate_half],
-        ])
-        plate_solids: list = [(plate_square, [hole], plate_thickness, 0.0)]
+        plate_solids: list = [(plate_outline, [hole], plate_thickness, 0.0)]
         for isl in islands:
             plate_solids.append((isl, [], plate_thickness, 0.0))
-        _write_prism_obj(mesh_dir / 'plate_visual.obj', plate_solids)
+        _write_prism_obj(mesh_dir / 'plate_visual.obj', plate_solids, precise=precise)
         assets.append('    <mesh name="plate_visual" file="plate_visual.obj"/>')
         if peg_has_visual:
             if peg_outer is not None and peg_inners:
@@ -803,34 +970,41 @@ def generate_xml(
                 ]
             else:
                 peg_solids = [(peg, [], peg_length, 0.0)]
-            _write_prism_obj(mesh_dir / 'peg_visual.obj', peg_solids)
+            _write_prism_obj(mesh_dir / 'peg_visual.obj', peg_solids, precise=precise)
             assets.append('    <mesh name="peg_visual" file="peg_visual.obj"/>')
             if handle_outline is not None:
                 handle_z = (peg_length + handle_height) / 2
                 _write_prism_obj(mesh_dir / 'handle_visual.obj',
-                                 [(handle_outline, [], handle_height, handle_z)])
+                                 [(handle_outline, [], handle_height, handle_z)],
+                                 precise=precise)
                 assets.append(
                     '    <mesh name="handle_visual" file="handle_visual.obj"/>')
     for i, w in enumerate(wedges):
-        assets.append(_extrude_mesh_xml(f'plate_{i}', w, plate_thickness, mesh_dir))
+        assets.append(_extrude_mesh_xml(f'plate_{i}', w, plate_thickness, mesh_dir, precise=precise))
     for i, p in enumerate(all_island_pieces):
-        assets.append(_extrude_mesh_xml(f'island_{i}', p, plate_thickness, mesh_dir))
+        assets.append(_extrude_mesh_xml(f'island_{i}', p, plate_thickness, mesh_dir, precise=precise))
     for name, poly, thick, _ in peg_geom_specs:
-        assets.append(_extrude_mesh_xml(name, poly, thick, mesh_dir))
+        assets.append(_extrude_mesh_xml(name, poly, thick, mesh_dir, precise=precise))
+    if bottom_stop_thickness > 0:
+        assets.append(_extrude_mesh_xml('bottom_stop', plate_outline,
+                                        bottom_stop_thickness, mesh_dir, precise=True))
     assets.append('  </asset>')
 
-    def _geom_line(mesh: str, rgba: str, density: float, *, pos_z: float = 0.0) -> str:
+    def _geom_line(mesh: str, rgba: str, density: float, *, pos_z: float = 0.0,
+                   mass: float | None = None) -> str:
         """Assemble one collision-or-combined mesh geom. When export_visuals
         is on, omit rgba (visual mesh carries color) and tag class="collision";
         otherwise emit rgba inline and no class."""
         parts = [f'type="mesh"', f'mesh="{mesh}"']
         if abs(pos_z) > 1e-9:
-            parts.append(f'pos="0 0 {pos_z:.6f}"')
+            parts.append(f'pos="0 0 {pos_z:.17g}"' if precise else f'pos="0 0 {pos_z:.6f}"')
         if export_visuals:
             parts.append('class="collision"')
         else:
             parts.append(f'rgba="{rgba}"')
-        if abs(density - 1000.0) > 1e-9:
+        if mass is not None:
+            parts.append(f'mass="{mass:.17g}"')
+        elif abs(density - 1000.0) > 1e-9:
             parts.append(f'density="{density:.3f}"')
         return f'      <geom {" ".join(parts)}/>'
 
@@ -840,7 +1014,8 @@ def generate_xml(
         wb.append('    <light pos="0.3 0.3 1.2" dir="-0.3 -0.3 -1" diffuse="0.8 0.8 0.8"/>')
     if include_floor and not mesh_only:
         wb.append('    <geom name="floor" type="plane" size="1 1 0.01" rgba="0.92 0.92 0.92 1"/>')
-    wb.append(f'    <body name="plate" pos="0 0 {plate_thickness / 2:.6f}">')
+    plate_z = format(plate_thickness / 2, '.17g' if precise else '.6f')
+    wb.append(f'    <body name="plate" pos="0 0 {plate_z}">')
     if free_plate:
         wb.append('      <freejoint/>')
     if export_visuals:
@@ -850,12 +1025,17 @@ def generate_xml(
         wb.append(_geom_line(f'plate_{i}', '0.70 0.75 0.82 1', plate_density))
     for i in range(len(all_island_pieces)):
         wb.append(_geom_line(f'island_{i}', '0.70 0.75 0.82 1', plate_density))
+    if bottom_stop_thickness > 0:
+        wb.append(_geom_line('bottom_stop', '0.25 0.25 0.25 1', plate_density,
+                             pos_z=-(plate_thickness + bottom_stop_thickness) / 2))
     wb.append('    </body>')
 
     if include_peg:
         peg_z = plate_thickness + peg_height
-        lateral = peg_clearance * 0.3
-        wb.append(f'    <body name="peg" pos="{lateral:.6f} 0 {peg_z:.6f}">')
+        lateral = peg_clearance * 0.3 if center_shapes else 0.0
+        peg_pos = (f'{lateral:.17g} 0 {peg_z:.17g}' if precise
+                   else f'{lateral:.6f} 0 {peg_z:.6f}')
+        wb.append(f'    <body name="peg" pos="{peg_pos}">')
         wb.append('      <freejoint/>')
         if peg_has_visual:
             wb.append('      <geom type="mesh" mesh="peg_visual" '
@@ -868,12 +1048,16 @@ def generate_xml(
             # even in export mode (no class; class="visual" would zero mass).
             density_attr = (f' density="{peg_density:.3f}"'
                             if abs(peg_density - 1000.0) > 1e-9 else '')
+            if peg_mass_kg is not None:
+                density_attr = f' mass="{masses["cylinder"]:.17g}"'
             wb.append(f'      <geom type="cylinder" '
                       f'size="{hole_size - peg_clearance:.6f} {peg_length / 2:.6f}" '
                       f'rgba="0.90 0.30 0.30 1"{density_attr}/>')
             if handle_height > 0:
                 handle_radius = (hole_size - peg_clearance) + handle_margin
                 handle_z = (peg_length + handle_height) / 2
+                if peg_mass_kg is not None:
+                    density_attr = f' mass="{masses["handle_cylinder"]:.17g}"'
                 wb.append(f'      <geom type="cylinder" '
                           f'size="{handle_radius:.6f} {handle_height / 2:.6f}" '
                           f'pos="0 0 {handle_z:.6f}" '
@@ -882,7 +1066,8 @@ def generate_xml(
             for name, _, _, pos_z in peg_geom_specs:
                 rgba = ('0.55 0.30 0.30 1' if name.startswith('handle_')
                         else '0.90 0.30 0.30 1')
-                wb.append(_geom_line(name, rgba, peg_density, pos_z=pos_z))
+                wb.append(_geom_line(name, rgba, peg_density, pos_z=pos_z,
+                                     mass=masses.get(name)))
         wb.append('    </body>')
     wb.append('  </worldbody>')
 
@@ -920,6 +1105,17 @@ def main(argv=None):
     p.add_argument('--hole-csv', type=Path,
                    help='load hole polygon from CSV (x,y per line); '
                         'peg is generated as inward offset by --peg-clearance')
+    p.add_argument('--handle-csv', type=Path,
+                   help='explicit convex handle outline containing the peg; '
+                        'shares the input hole/peg coordinate frame')
+    p.add_argument('--plate-csv', type=Path,
+                   help='explicit convex outer plate outline, containing hole and handle')
+    p.add_argument('--plate-min-rim-m', type=float, default=0.0,
+                   help='minimum plate rim beyond hole and handle (requires --plate-csv)')
+    p.add_argument('--bottom-stop-thickness', type=float, default=0.0,
+                   help='optional floor thickness below the opening, following the plate outline')
+    p.add_argument('--preserve-origin', action='store_true',
+                   help='retain input coordinates and omit the default lateral spawn offset')
     p.add_argument('--hole-island-csv', action='append', dest='hole_island_csvs',
                    type=Path, default=[],
                    help='optional island of material inside the hole '
@@ -940,6 +1136,9 @@ def main(argv=None):
     p.add_argument('--peg-density', type=float, default=1000.0,
                    help='peg material density in kg/m^3 (default 1000 = water). '
                         'MuJoCo derives mass and inertia from density * volume.')
+    p.add_argument('--peg-mass-kg', type=float,
+                   help='TOTAL insertion-plus-handle mass, distributed by volume; '
+                        'overrides --peg-density and is not scaled by --scale')
     p.add_argument('--plate-density', type=float, default=1000.0,
                    help='plate material density in kg/m^3 (default 1000). '
                         'Only matters when --free-plate is set.')
@@ -1010,6 +1209,8 @@ def main(argv=None):
     scale = args.scale if args.scale is not None else 1.0
     peg_poly = np.loadtxt(args.peg_csv, delimiter=',') * scale if args.peg_csv else None
     hole_poly = np.loadtxt(args.hole_csv, delimiter=',') * scale if args.hole_csv else None
+    handle_poly = np.loadtxt(args.handle_csv, delimiter=',') * scale if args.handle_csv else None
+    plate_poly = np.loadtxt(args.plate_csv, delimiter=',') * scale if args.plate_csv else None
     hole_island_polys = [np.loadtxt(pth, delimiter=',') * scale
                          for pth in args.hole_island_csvs]
 
@@ -1023,9 +1224,13 @@ def main(argv=None):
             peg_length=args.peg_length * scale,
             peg_height=args.peg_height * scale,
             peg_density=args.peg_density,
+            peg_mass_kg=args.peg_mass_kg,
             plate_density=args.plate_density,
             handle_height=args.handle_height * scale,
             handle_margin=args.handle_margin * scale,
+            plate_min_rim_m=args.plate_min_rim_m * scale,
+            bottom_stop_thickness=args.bottom_stop_thickness * scale,
+            center_shapes=not args.preserve_origin,
             n_circle=args.n_circle,
             include_peg=not args.no_peg,
             include_floor=not args.no_floor,
@@ -1034,6 +1239,8 @@ def main(argv=None):
             mesh_dir=mesh_dir,
             peg_poly=peg_poly,
             hole_poly=hole_poly,
+            handle_poly=handle_poly,
+            plate_poly=plate_poly,
             hole_island_polys=hole_island_polys or None,
         )
     except ValueError as e:
