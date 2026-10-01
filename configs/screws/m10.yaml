@@ -21,7 +21,7 @@ bolt:
   head_height:         0.0064
   head_across_flats:   0.016      # 16 mm (standard M10 hex)
   head_shape:          hex
-  density:             100
+  density:             7800       # steel (kg/m^3)
 
 nut:
   include:             true
