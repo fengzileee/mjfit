@@ -322,3 +322,34 @@ def test_partial_engagement_play():
     support = G.partial_radial_play(pair, 0.25, math.pi / 2, spread=math.radians(30),
                                     step=math.radians(10))
     assert support > ray + 2e-5
+
+
+# ----- turning torque against friction (T8) ---------------------------------------------
+
+def test_screw_torque_formula():
+    """Frictionless, raising takes F r tan(lam) and lowering gives it back; the
+    thread self-locks once mu' = mu / cos(beta) passes tan(lam); the run-down
+    torque is lowering the nut's weight."""
+    c, F = 1e-4, 1.0
+    r = G.pitch_radius(TASK)
+    tan_lam = TASK.lead / (2 * math.pi * r)
+    _, cos_beta = G.seat_contact(TASK, c)
+    assert G.screw_torque(TASK, F, 0.0, True, c) == pytest.approx(F * r * tan_lam)
+    assert G.screw_torque(TASK, F, 0.0, False, c) == pytest.approx(-F * r * tan_lam)
+    assert G.screw_torque(TASK, F, tan_lam * cos_beta, False, c) == pytest.approx(0, abs=1e-15)
+    up, down = (G.screw_torque(TASK, F, 0.3, raising, c) for raising in (True, False))
+    assert up > down > 0
+    assert G.rundown_torque(TASK, 0.01, 0.3, c) == pytest.approx(
+        G.screw_torque(TASK, 9.81 * 0.01, 0.3, False, c))
+
+
+def test_torque_probe_tracks_the_formula():
+    """At T4's light load with condim 3, the engaged nut turns at a little
+    over the formula; mkscrew's default condim 4 adds torsional friction."""
+    from benchmark.thread import probes as T
+    from benchmark.thread.representations import build_thread
+    rep = build_thread(TASK, 'ours', {'segments': 24}, 1e-4)
+    c3 = T.probe_torque(TASK, rep, 0.3, 'up', 0.1, 3, multiccd=False)
+    c4 = T.probe_torque(TASK, rep, 0.3, 'up', 0.1, 4, multiccd=False)
+    assert c3['outcome'] == 'turns' and 1.0 < c3['ratio'] < 1.6
+    assert c4['ratio'] > 1.5 * c3['ratio']

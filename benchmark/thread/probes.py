@@ -34,6 +34,14 @@ The nut on the bolt's tip (initial engagement):
               contact off the push, as the peg's S2); tilt, the first contact
               about the hinge.
 
+Friction:
+
+  T8 torque : the engaged nut (axial slide + spin hinge, no joint damping)
+              pressed down by an axial load, with friction mu; the torque
+              ramps slowly until the nut turns 5 deg, against it ('up') or
+              with it ('down'). Reference: the power-screw formula
+              (geometry.screw_torque), textbook rather than exact.
+
 Errors are micrometres of wall position: positive means the nut went further
 than the geometry allows (penetration), negative that it was stopped early
 (phantom material). T1-T4 also record the true signed distance at every
@@ -460,6 +468,67 @@ def probe_partial(task: ThreadTask, rep: ThreadRep, duration: float = 1.0,
                          **_window_stats((theta - truth) * task.r_major * UM),
                          'overlap_at_start': overlap0})
     return rows
+
+
+# ----- T8: turning torque against friction --------------------------------------------------
+
+TORQUE_MU = (0.1, 0.3, 1.0)
+# (axial load N, condim, friction cone, timestep s). condim 4 carries mkscrew's
+# default torsional coefficient, TORQUE_TORSION.
+TORQUE_CASES = ((0.1, 3, 'pyramidal', 1e-3), (0.1, 3, 'elliptic', 1e-3),
+                (0.1, 4, 'pyramidal', 1e-3), (1.0, 3, 'pyramidal', 1e-3),
+                (1.0, 3, 'elliptic', 1e-3), (1.0, 3, 'elliptic', 2.5e-4))
+TORQUE_TORSION = 0.01                            # m
+TORQUE_TURN = math.radians(5)                    # a sustained turn: breakaway
+
+
+def probe_torque(task: ThreadTask, rep: ThreadRep, mu: float, direction: str = 'up',
+                 load: float = 0.1, condim: int = 3, cone: str = 'pyramidal',
+                 timestep: float = 1e-3, multiccd: bool = True, ramp: float = 3.0) -> dict:
+    """T8: the torque that makes the engaged nut turn. The nut sits at home,
+    pressed down by `load`; the torque ramps from 0 to 3x the formula's
+    raising torque over `ramp` seconds, against the load ('up') or with it
+    ('down'), and breakaway is the first time the nut has turned
+    TORQUE_TURN that way. Joint damping is off, so the torque only meets
+    contact."""
+    c = rep.clearance
+    sc = build_scene(task, rep, joints='screw', friction=mu, condim=condim, multiccd=multiccd,
+                     timestep=timestep)
+    m = sc.model
+    m.dof_damping[:] = 0.0
+    m.geom_friction[:, 1] = TORQUE_TORSION if condim >= 4 else 0.0
+    m.opt.cone = (mujoco.mjtCone.mjCONE_ELLIPTIC if cone == 'elliptic'
+                  else mujoco.mjtCone.mjCONE_PYRAMIDAL)
+    d = mujoco.MjData(m)
+    up = direction == 'up'
+    sign = task.hand * (1.0 if up else -1.0)          # + spin raises a right-hand nut
+    exact = geo.screw_torque(task, load, mu, raising=up, c=c)
+    top = 3.0 * geo.screw_torque(task, load, mu, raising=True, c=c)
+    settle = 0.2
+    broke, free = math.nan, 0
+    for i in range(int((settle + ramp) / timestep)):
+        t = i * timestep
+        tau = 0.0 if t < settle else top * (t - settle) / ramp
+        d.xfrc_applied[sc.nut_body] = [0, 0, -load, 0, 0, sign * tau]
+        mujoco.mj_step(m, d)
+        if t >= settle:
+            free += d.ncon == 0        # a step that began with no contact: the nut fell freely
+            if sign * d.qpos[1] > TORQUE_TURN:
+                broke = tau
+                break
+    # A self-locking thread holds with no torque; turning down at under 5 % of
+    # the lowering torque means it back-drove.
+    if math.isnan(broke):
+        outcome = 'holds'               # never turned within 3x the raising torque
+    elif not up and exact > 0 and broke < 0.05 * exact:
+        outcome = 'back-drives'
+    else:
+        outcome = 'turns'
+    return {**_base(task, rep, multiccd), 'mu': mu, 'direction': direction, 'load_N': load,
+            'condim': condim, 'cone': cone, 'timestep_ms': timestep * 1e3,
+            'formula_mNm': exact * 1e3, 'breakaway_mNm': broke * 1e3,
+            'ratio': broke / exact if exact > 0 else math.nan, 'outcome': outcome,
+            'free_steps': int(free)}
 
 
 def memory(task: ThreadTask, rep: ThreadRep) -> dict:

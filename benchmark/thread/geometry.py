@@ -488,20 +488,31 @@ def pitch_radius(task: ThreadTask) -> float | None:
     return float(rs[i] + (half - width[i]) / (width[i + 1] - width[i]) * (rs[i + 1] - rs[i]))
 
 
-def rundown_torque(task: ThreadTask, mass: float, mu: float, c: float = 0.0) -> float:
-    """Torque that turns a nut down a vertical bolt at constant speed, carrying
-    its own weight, with Coulomb friction mu on the flanks: the power-screw
-    lowering formula T = m g r (mu' - tan lam) / (1 + mu' tan lam). The
-    contact normal's tilt is folded into mu' = mu / cos(beta) (beta = 30° for
-    ISO), and the load is taken at the pitch radius (ISO: r2 = (d - 0.6495 P)
-    / 2), or at the contact for a wire that never reaches half a pitch wide
-    (lead angle lam). Textbook, not exact: the real load spreads over the
-    tooth."""
+def screw_torque(task: ThreadTask, load: float, mu: float, raising: bool,
+                 c: float = 0.0) -> float:
+    """Torque that turns a nut pressed down a vertical bolt by an axial load
+    (N), with Coulomb friction mu on the flanks: the power-screw formula,
+    raising the load (turning against it) T = F r (mu' + tan lam) / (1 - mu'
+    tan lam), lowering it (turning with it) T = F r (mu' - tan lam) / (1 + mu'
+    tan lam). The contact normal's tilt is folded into mu' = mu / cos(beta)
+    (beta = 30° for ISO), and the load is taken at the pitch radius (ISO:
+    r2 = (d - 0.6495 P) / 2), or at the contact for a wire that never reaches
+    half a pitch wide (lead angle lam). Lowering is negative when the thread
+    does not self-lock (mu' < tan lam). Textbook, not exact: the real load
+    spreads over the tooth."""
     r_contact, cos_beta = seat_contact(task, c)
     r = pitch_radius(task) or r_contact
     tan_lam = task.lead / (2 * math.pi * r)
     mu_f = mu / cos_beta
-    return 9.81 * mass * r * (mu_f - tan_lam) / (1 + mu_f * tan_lam)
+    if raising:
+        return load * r * (mu_f + tan_lam) / (1 - mu_f * tan_lam)
+    return load * r * (mu_f - tan_lam) / (1 + mu_f * tan_lam)
+
+
+def rundown_torque(task: ThreadTask, mass: float, mu: float, c: float = 0.0) -> float:
+    """Torque that turns a nut down a vertical bolt at constant speed, carrying
+    its own weight: screw_torque lowering m g."""
+    return screw_torque(task, 9.81 * mass, mu, raising=False, c=c)
 
 
 # ----- the nut on the bolt's tip, coaxial: exact contact in the meridian plane -------------

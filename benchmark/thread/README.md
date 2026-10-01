@@ -349,6 +349,56 @@ exact rows give the range over directions.
 - **The analytic SDF is 11–74 µm off** at its finest setting, and worse at
   MuJoCo's default. From 32 segments, ours is more accurate.
 
+## Turning torque against friction (T8)
+
+How hard is it to turn an engaged nut? The nut sits at home, fully engaged,
+on an axial slide and spin hinge with no joint damping, pressed down by an
+axial load. Friction is μ on both parts. The torque ramps slowly, and the
+breakaway torque is the one at which the nut has turned 5°, either against
+the load or with it. The reference is the power-screw formula
+(`geometry.screw_torque`), at the pitch radius with the flank tilt folded in
+(μ′ = μ/cos 30°). It is textbook, not exact. Figure:
+[`../report/thread_torque.png`](../report/thread_torque.png). Full table:
+[`../report/thread_summary.md`](../report/thread_summary.md).
+
+Breakaway over the formula, against / with the load, c = 100 µm, MULTICCD
+off. "> 3": never turned within 3× the formula. "0": back-drove, so the
+thread did not self-lock, where at this friction it should.
+
+| setup (ours, 48 segments) | μ = 0.1 | μ = 0.3 | μ = 1 |
+|---|---|---|---|
+| 0.1 N, condim 3 | > 3 / 1.49 | 1.22 / 1.28 | 1.20 / 0.97 |
+| 0.1 N, condim 3, elliptic cone | 2.79 / 1.48 | 1.20 / 1.22 | 1.16 / 1.18 |
+| 0.1 N, condim 4 (mkscrew's default) | > 3 / > 3 | 2.41 / 3.40 | 1.28 / 1.53 |
+| 1 N, condim 3 | > 3 / 0 | 1.63 / 1.81 | 1.28 / 1.32 |
+| 1 N, condim 3, elliptic cone | 2.54 / 5.71 | 1.60 / 1.92 | 1.28 / 1.35 |
+| 1 N, condim 3, elliptic, 0.25 ms step | 1.48 / 1.50 | 1.24 / 1.27 | 1.14 / 1.22 |
+| analytic SDF 100 × 30, 0.1 N, condim 3 | 1.08 / 1.30 | 1.08 / 1.03 | 1.15 / 1.16 |
+
+- **At a light load, the torque follows the formula, a little high.** With
+  condim 3 and μ ≥ 0.3, ours needs 1.0–1.7× the formula at every resolution
+  (mostly 1.1–1.4×). The analytic SDF needs 1.0–1.2×. With MULTICCD on, 96–192
+  segments misfire, up to more than 3× at μ = 0.3.
+- **At low friction, ours' facets dominate.** At μ = 0.1 the formula torque
+  is small, and ours needs 1.5–5× it, or never turns within 3×. The analytic
+  SDF, which has no seams, still needs only 1.1–1.3×. This is the same seam
+  resistance that jams coarse wedges after the T6 click.
+- **condim 4 adds a large spurious term.** mkscrew's default torsional
+  coefficient (0.01 m) resists the spin at every flank contact: 1.3–3.4× at
+  μ = 0.3–1, and no turn within 3× at μ = 0.1. Use condim 3 on threads, as
+  the example configs do.
+- **A heavy load for the nut's mass breaks it at a 1 ms step.** 1 N is
+  120 m/s² on the 8 g nut, so a step that starts without contact lets the
+  nut fall 120 µm (a·dt²), about the whole axial play. It digs into the flanks
+  and chatters. The torque rises to 1.3–1.9× at μ ≥ 0.3 and 2.5–5.7× at
+  μ = 0.1. With MuJoCo's default pyramidal cone at μ = 0.1 the thread
+  back-drives, and the analytic SDF drops to 0.7–1.0×. A 0.25 ms step brings
+  it back to 1.1–1.5×. Keep the load over the nut's mass, times the step
+  squared, well under the axial play.
+- **Bolt and nut friction combine as the larger.** MuJoCo gives a contact
+  the larger of the two geoms' friction. Measured: a bolt at 0.3 against a
+  nut at 1.0 breaks away at exactly the torque of both at 1.0.
+
 ## Renderings
 
 `MUJOCO_GL=egl python -m benchmark.thread.render` writes three videos to
@@ -593,6 +643,7 @@ both rod ends and both nut faces (`chamfer` = the thread depth).
 | T5 spin | free nut, gravity, frictionless (and friction 0.3) | descends at g/(1 + I(2π/P)²/m) (0.013 m/s²); at friction 0.3, holds |
 | T6 start | nut resting on the bolt's top face; axial slide + spin hinge, frictionless, T4's 0.1 N load; a constant torque of 5× (and 2×) the exact back-off torque, 0.1 N × lead/2π. `back` unscrews, `on` screws | the quasi-static path `geometry.Tip.path`: `back` clicks (drops by the axial play 4c/√3) and rides the flank back up; `on` starts down the thread and follows the helix for a turn. Scored: event angle (as axial phase along the helix), click depth, height off the drops; outcome clicks / jams / no click / falls, or engages / jams / skips |
 | T7 partial | T2 and T3 with the nut threaded ¼, ½, 1 and 2 turns onto the tip; 12 directions, 4 hinge axes, hinge half-way along the engaged length | on the sampled exact surfaces, end faces included: radial, the support along the push of the free sideways translations (a frictionless nut slides around a contact whose normal is off the push, as in the peg's S2), from first-contact rays (`partial_radial_play`); tilt, the first contact about the hinge (`partial_max_tilt`), its error at the thread crest |
+| T8 torque | engaged nut, axial slide + spin hinge, no joint damping, axial load 0.1 or 1 N, friction μ = 0.1, 0.3, 1 (condim 3 or 4, pyramidal or elliptic cone, 1 or 0.25 ms step); the torque ramps until the nut turns 5°, against the load or with it | the power-screw formula (`geometry.screw_torque`), textbook rather than exact; outcome turns / holds / back-drives |
 
 The exact geometry is in `geometry.py`. A point is inside the thread exactly
 when its meridian coordinates (r, z − P·φ/2π mod P) lie in the tooth profile.
@@ -640,6 +691,7 @@ distance at a 3° helix angle.
 python -m benchmark.thread.run --parts probes                 # accuracy, all cores
 python -m benchmark.thread.run --parts speed                  # timing: idle machine
 python -m benchmark.thread.run --probes start partial        # T6, T7 only
+python -m benchmark.thread.run --probes torque --methods ours sdf_analytic --clearance 100  # T8
 python -m benchmark.thread.report                             # tables + figures -> ../report/
 python -m benchmark.thread.report --traces                    # + thread_start.png (re-simulates)
 MUJOCO_GL=egl python -m benchmark.thread.render               # videos -> ../results/render/

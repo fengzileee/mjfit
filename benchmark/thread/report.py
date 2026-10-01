@@ -26,7 +26,8 @@ MARKER = {**R.MARKER, 'sdf_analytic': 'v'}
 SPIN_T = 0.8  # T5 duration (s)
 YMAX_OVER_C = 5  # Pareto y axis stops at 5 x clearance; blow-ups sit on the edge
 KEYS = ['label', 'multiccd', 'clearance_um', 'direction', 'theta', 'phi_deg', 'friction',
-        'scenario', 'torque_ratio', 'turns', 'kind', 'angle_deg']
+        'scenario', 'torque_ratio', 'turns', 'kind', 'angle_deg', 'mu', 'load_N', 'condim',
+        'cone', 'timestep_ms']
 ACCURACY = ('axial', 'radial', 'tilt', 'screw')
 
 
@@ -381,6 +382,105 @@ def fig_partial(p, out: Path):
     plt.close(fig)
 
 
+# ----- T8: turning torque against friction -------------------------------------------------
+
+# (load N, condim, cone, timestep ms) -> name; the first is MuJoCo's default cone
+# with the example configs' condim.
+TORQUE_CASES = {(0.1, 3, 'pyramidal', 1.0): '0.1 N, condim 3',
+                (0.1, 3, 'elliptic', 1.0): '0.1 N, condim 3, elliptic',
+                (0.1, 4, 'pyramidal', 1.0): '0.1 N, condim 4 (mkscrew default)',
+                (1.0, 3, 'pyramidal', 1.0): '1 N, condim 3',
+                (1.0, 3, 'elliptic', 1.0): '1 N, condim 3, elliptic',
+                (1.0, 3, 'elliptic', 0.25): '1 N, condim 3, elliptic, 0.25 ms step'}
+
+
+def _torque_case(df: pd.DataFrame, case) -> pd.DataFrame:
+    load, condim, cone, dt = case
+    return df[(df.load_N == load) & (df.condim == condim) & (df.cone == cone)
+              & np.isclose(df.timestep_ms, dt)]
+
+
+def _torque_cell(r: pd.DataFrame) -> str:
+    """'up / down' breakaway over the formula; > 3 never turned, 0 back-drove."""
+    out = []
+    for d in ('up', 'down'):
+        x = r[r.direction == d]
+        if not len(x):
+            out.append('')
+        elif x.outcome.iloc[0] == 'holds':
+            out.append('> 3')
+        elif x.outcome.iloc[0] == 'back-drives':
+            out.append('0')
+        else:
+            out.append(f'{x.ratio.iloc[0]:.2f}')
+    return ' / '.join(out)
+
+
+def summarize_torque(p, c: float) -> pd.DataFrame:
+    """T8, each setting at 0.1 N with condim 3 and MuJoCo's default cone:
+    breakaway torque over the formula, against / with the load, per mu."""
+    df, rows = p['torque'], []
+    df = _torque_case(df[df.clearance_um == c], next(iter(TORQUE_CASES)))
+    for label, m, mccd in _settings(df, c):
+        s = df[(df.label == label) & (df.multiccd == mccd)]
+        row = {'setting': NAMES[m] + ' ' + tag(label, mccd)}
+        for mu in sorted(set(s.mu)):
+            row[f'μ = {mu:g}'] = _torque_cell(s[s.mu == mu])
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def torque_cases(p, c: float, label: str, mccd: bool) -> pd.DataFrame:
+    """T8 for one setting, by setup."""
+    df = p['torque']
+    s = df[(df.clearance_um == c) & (df.label == label) & (df.multiccd == mccd)]
+    rows = []
+    for case, name in TORQUE_CASES.items():
+        r = _torque_case(s, case)
+        if len(r):
+            rows.append({'setup': name, **{f'μ = {mu:g}': _torque_cell(r[r.mu == mu])
+                                           for mu in sorted(set(r.mu))}})
+    return pd.DataFrame(rows)
+
+
+def fig_torque(p, out: Path, c: float = 100, label: str = 'ours(segments=48)', mccd=False):
+    """T8: breakaway torque over the formula against friction, per setup."""
+    df = p['torque']
+    s = df[(df.clearance_um == c) & (df.label == label) & (df.multiccd == mccd)]
+    if not len(s):
+        return
+    fig, axes = plt.subplots(1, 2, figsize=(11, 3.8), sharey=True)
+    colors = ['#2a78d6', '#1baf7a', '#eb6834', '#8a5cc8', '#eda100', '#0b0b0b']
+    for ax, d in zip(axes, ('up', 'down')):
+        for (case, name), col in zip(TORQUE_CASES.items(), colors):
+            r = _torque_case(s, case)
+            r = r[r.direction == d].sort_values('mu')
+            if not len(r):
+                continue
+            y = np.where(r.outcome == 'holds', 3.0, np.where(r.outcome == 'back-drives', 0.02,
+                                                              np.minimum(r.ratio, 3.0)))
+            ax.plot(r.mu, y, '-o', color=col, ms=4, lw=1.2, label=name)
+        ax.axhline(1, color=R.INK, lw=1, ls=(0, (4, 2)))
+        ax.axhspan(2.9, 3.2, color=R.GRID, lw=0)
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ax.set_ylim(0.015, 3.3)
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%g'))
+        ax.yaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%g'))
+        ax.set_xlabel('friction μ (both parts)')
+        ax.set_title(('turning against the load' if d == 'up' else 'turning with the load')
+                     + f', {NAMES[label.split("(")[0]]} {tag(label, mccd)}', loc='left')
+    axes[0].set_ylabel('breakaway torque / power-screw formula')
+    axes[1].legend(fontsize=6.5, loc='lower right')
+    fig.suptitle('T8: the engaged nut, pressed down by an axial load, under a slow torque ramp. '
+                 'Dashed: the formula.\nTop band: 3x or more (or never turned within 3x); '
+                 'bottom: back-drove (the thread did not self-lock).', x=0.01, ha='left',
+                 fontsize=9, color=R.INK2)
+    fig.tight_layout(rect=(0, 0, 1, 0.88))
+    fig.savefig(out / 'thread_torque.png', dpi=160)
+    plt.close(fig)
+
+
 # (method, params, multiccd) re-simulated for the T6 trace figure
 TRACE_SETTINGS = [('ours', {'segments': 24}, False), ('ours', {'segments': 48}, False),
                   ('ours', {'segments': 96}, False),
@@ -454,7 +554,8 @@ def main(argv=None):
                     help='re-simulate a few T6 runs for thread_start.png (a minute or two)')
     args = ap.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
-    p = {k: _read(args.results, k) for k in ('memory',) + ACCURACY + ('spin', 'start', 'partial')}
+    p = {k: _read(args.results, k)
+         for k in ('memory',) + ACCURACY + ('spin', 'start', 'partial', 'torque')}
     speed = _read(args.results, 'cpu_single')
     if p['axial'] is None:
         raise SystemExit('no thread results')
@@ -477,6 +578,16 @@ def main(argv=None):
             table.to_csv(args.out / f'thread_partial_c{c:g}.csv', index=False)
             md += [f'## T7, c = {c:g} µm\n', table.to_markdown(index=False, floatfmt='.3g'), '\n']
         fig_partial(p, args.out)
+    if p['torque'] is not None:
+        md.append('# Turning torque against friction (T8)\n')
+        for c in sorted(set(p['torque'].clearance_um), reverse=True):
+            table = summarize_torque(p, c)
+            table.to_csv(args.out / f'thread_torque_c{c:g}.csv', index=False)
+            md += [f'## T8, c = {c:g} µm: breakaway / formula, up / down (0.1 N, condim 3)\n',
+                   table.to_markdown(index=False), '\n',
+                   f'## T8, c = {c:g} µm, ours n=48, MULTICCD off, by setup\n',
+                   torque_cases(p, c, 'ours(segments=48)', False).to_markdown(index=False), '\n']
+        fig_torque(p, args.out)
     (args.out / 'thread_summary.md').write_text('\n'.join(md))
     fig_pareto(p, speed, args.out, 'memory', 'pareto_thread_memory.png')
     if speed is not None:

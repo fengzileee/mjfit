@@ -32,7 +32,7 @@ from .representations import build_thread, cache_path, exact_meshes
 from .scene import build_scene
 
 HERE = Path(__file__).resolve().parents[1]
-PROBES = ('memory', 'axial', 'radial', 'tilt', 'screw', 'spin', 'start', 'partial')
+PROBES = ('memory', 'axial', 'radial', 'tilt', 'screw', 'spin', 'start', 'partial', 'torque')
 TILT_PHI = (0.0, math.pi / 2)
 # T6 torque ratios: T4's, and a lower one that the flanks' facets can stop
 START_RATIOS = (T.START_TORQUE_RATIO, 2.0)
@@ -71,6 +71,11 @@ def run_probes(task, method, params, c, multiccd, which) -> dict[str, list[dict]
                          for direction in ('back', 'on') for k in START_RATIOS]
     if 'partial' in which:
         out['partial'] += T.probe_partial(task, rep, multiccd=multiccd)
+    if 'torque' in which:
+        out['torque'] += [T.probe_torque(task, rep, mu, direction, load, condim, cone, dt,
+                                         multiccd=multiccd)
+                          for mu in T.TORQUE_MU for direction in ('up', 'down')
+                          for load, condim, cone, dt in T.TORQUE_CASES]
     for rows in out.values():
         for r in rows:
             r.update(setup_s=rep.setup_s, n_bolt=rep.bolt.n_geoms, n_nut=rep.nut.n_geoms)
