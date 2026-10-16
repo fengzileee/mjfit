@@ -178,6 +178,17 @@ def _convex_polygon(vertices, name: str) -> np.ndarray:
     return poly
 
 
+def _points_inside(poly: np.ndarray, pts: np.ndarray) -> np.ndarray:
+    """Whether each point lies inside the polygon (even-odd rule; any orientation, convex or not)."""
+    x, y = pts[:, :1], pts[:, 1:2]
+    x0, y0 = poly[None, :, 0], poly[None, :, 1]
+    x1, y1 = np.roll(poly[:, 0], -1)[None], np.roll(poly[:, 1], -1)[None]
+    straddle = (y0 > y) != (y1 > y)
+    dy = np.where(y1 != y0, y1 - y0, 1.0)
+    crosses = straddle & (x < x0 + (y - y0) * (x1 - x0) / dy)
+    return crosses.sum(axis=1) % 2 == 1
+
+
 def _require_containment(outer: np.ndarray, inner: np.ndarray,
                          margin: float, name: str) -> None:
     edges = np.roll(outer, -1, axis=0) - outer
@@ -801,9 +812,22 @@ def generate_xml(
             peg_outer = _offset_polygon_inward(hole, peg_clearance)
             peg_inners = [_offset_polygon_outward(isl, peg_clearance)
                           for isl in islands]
+            # A clearance too large for the opening leaves no shell: the inward offset
+            # flips, or a pocket (island plus clearance) no longer fits inside the peg.
+            if _signed_area(peg_outer) <= 0:
+                raise ValueError(f"peg_clearance {peg_clearance:g} m is too large for the hole: "
+                                 "its inward offset leaves no peg.")
+            for k, pocket in enumerate(peg_inners):
+                if not _points_inside(peg_outer, pocket).all():
+                    raise ValueError(f"The pocket around island {k} does not fit inside the peg: with "
+                                     f"peg_clearance {peg_clearance:g} m the island plus its clearance is "
+                                     "larger than the hole less its clearance.")
             peg = peg_outer  # placeholder for plate_half bound check
         else:
             peg = _offset_polygon_inward(hole, peg_clearance)
+            if _signed_area(peg) <= 0:
+                raise ValueError(f"peg_clearance {peg_clearance:g} m is too large for the hole: "
+                                 "its inward offset leaves no peg.")
         shape = None
     else:
         shift = np.zeros(2)

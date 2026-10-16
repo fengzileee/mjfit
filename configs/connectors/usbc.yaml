@@ -1,7 +1,7 @@
 # USB-C receptacle. Dimensions from USB Type-C Spec R2.0.
 # Opening: 8.34 x 2.56 mm stadium. Thin centered tongue ~6.5 x 0.7 mm.
 
-clearance:       0.001    # 50 µm — tight USB-C fit
+clearance:       0.00005  # 50 µm per side — tight USB-C fit
 plate_size:      0.015
 plate_thickness: 0.0062     # real USB-C receptacle depth
 peg_length:      0.012
