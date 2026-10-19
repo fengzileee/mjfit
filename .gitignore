@@ -2,15 +2,22 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+build/
+dist/
 .venv/
 venv/
+.pytest_cache/
+.ruff_cache/
 
 # macOS
 .DS_Store
 
-examples/m6
-examples/m10
+# Generated models and meshes
+*_meshes/
 
-# benchmark outputs
-benchmark/results/
+# Benchmark: decomposition cache and rendered videos (release assets, see benchmark/README.md)
 benchmark/cache/
+benchmark/results/**/*.mp4
+
+# MuJoCo warnings
+MUJOCO_LOG.TXT
