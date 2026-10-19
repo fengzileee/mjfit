@@ -1,10 +1,13 @@
-"""Accuracy probes on MuJoCo Warp, for comparison with the CPU sweep.
+"""Accuracy probes on MuJoCo Warp; rows go to results/peg/probes_gpu/.
 
     python -m benchmark.run_warp_probes          # needs a CUDA GPU
     python -m benchmark.run_warp_probes --shapes circle --probes lateral tilt --clearances 100 20
+    python -m benchmark.run_warp_probes --config benchmark/configs/circle_cpu.yaml \
+        --probes lateral tilt --clearances 100 20     # extended circle sweep
 
 Runs S2 (lateral play; one world per push direction), S3 (tilt), and S1
 (drop outcome) on the same scenes and cached decompositions as run_probes.
+Rows are merged into the stored tables as each configuration finishes.
 """
 from __future__ import annotations
 
@@ -13,9 +16,9 @@ import math
 import time
 from pathlib import Path
 
-import pandas as pd
 import yaml
 
+from . import tables
 from .geometry import Task
 from .representations import build_plate
 from .run_probes import rep_configs
@@ -47,7 +50,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--config', type=Path, default=HERE / 'configs' / 'probes.yaml')
-    ap.add_argument('--out', type=Path, default=HERE / 'results' / 'probes')
+    ap.add_argument('--results', type=Path, default=tables.ROOT,
+                    help='raw results root (default: benchmark/results)')
     ap.add_argument('--shapes', nargs='*')
     ap.add_argument('--methods', nargs='*')
     ap.add_argument('--probes', nargs='*', choices=PROBES, default=list(PROBES))
@@ -59,7 +63,6 @@ def main(argv=None):
     pcfg = cfg['probes']
     for probe in ('lateral', 'tilt') if args.clearances else ():
         pcfg[probe]['clearance_um'] = args.clearances
-    tables: dict[str, list[dict]] = {p: [] for p in args.probes}
     t0 = time.perf_counter()
     for shape in args.shapes or cfg['shapes']:
         task = Task(shape, **cfg['task'])
@@ -70,15 +73,12 @@ def main(argv=None):
                 with _fresh_process() as pool:
                     label, out = pool.submit(_job, task, method, params, multiccd,
                                              pcfg, args.probes).result()
-                for probe, rows in out.items():
-                    tables[probe] += rows
                 print(f'[{time.perf_counter() - t0:6.0f}s] {shape} {label} '
                       f'multiccd={multiccd}', flush=True)
-                args.out.mkdir(parents=True, exist_ok=True)  # checkpoint as we go
-                for probe, rows in tables.items():
+                for probe, rows in out.items():  # checkpoint as we go
                     if rows:
-                        pd.DataFrame(rows).to_csv(args.out / f'warp_{probe}.csv', index=False)
-    print(f'wrote {args.out}')
+                        tables.write(f'peg/probes_gpu/{probe}', rows, args.results)
+    print(f'wrote {tables.path("peg/probes_gpu/*", args.results)}')
 
 
 if __name__ == '__main__':

@@ -20,12 +20,13 @@ import numpy as np
 
 from ..representations import CACHE_DIR, _solid_hulls
 from . import geometry as geo
-from .geometry import ThreadTask, mkscrew
+import mjfit
+
+from .geometry import ThreadTask
 
 CACHE_VERSION = 1
-# Bumped when mkscrew's wedges change, so only 'ours' is rebuilt (3: the
-# partial first turn at each part's z = 0 end is no longer missing, and the
-# nut's flank correction covers facet interiors, a few nm).
+# Part of the 'ours' cache key: bumped whenever the wedge generator's output
+# changes, so that only 'ours' is rebuilt.
 OURS_VERSION = 3
 # sdf_analytic: the exact ISO parts as an analytic SDF plugin (plugin/), so its
 # only error is MuJoCo's SDF contact search; its knob is that search's effort.
@@ -87,6 +88,10 @@ def cache_path(task: ThreadTask, method: str, params: dict | None, clearance: fl
 
 def build_thread(task: ThreadTask, method: str, params: dict | None, clearance: float,
                  use_cache: bool = True) -> ThreadRep:
+    """Both parts for one setting. use_cache: load the cached decomposition,
+    or build it and store it; False builds afresh and leaves the cache alone
+    (the exact meshes the baselines start from are still read from, or added
+    to, the cache: see exact_meshes)."""
     params = dict(params or {})
     if method not in METHODS:
         raise ValueError(f"Unknown method {method!r}; known: {METHODS}")
@@ -124,7 +129,8 @@ def build_thread(task: ThreadTask, method: str, params: dict | None, clearance: 
             bolt = PartRep(hulls=decompose(bolt_mesh, **params))
             nut = PartRep(hulls=decompose(nut_mesh, **params))
     rep = ThreadRep(method, params, clearance, bolt, nut, time.perf_counter() - t0)
-    _save(path, rep)
+    if use_cache:
+        _save(path, rep)
     return rep
 
 
@@ -155,16 +161,16 @@ def _load(path, method, params, clearance) -> ThreadRep:
 
 
 def _ours(task: ThreadTask, clearance: float, segments: int = 24, relief_um: float = 0.0):
-    """mkscrew's own pipeline: generate_screw_xml, then read back the parts.
-    relief_um is mkscrew's seam_relief (µm)."""
-    xml = mkscrew.generate_screw_xml(
+    """mjfit's own pipeline: mjfit.thread, then read back the parts.
+    relief_um is the seam relief (µm)."""
+    xml = mjfit.thread(
         major_diameter=task.major_diameter, pitch=task.pitch, thread_length=task.bolt_length,
-        thread_form=task.form, thread_params=task.params, n_starts=task.starts,
-        handedness=task.handedness, thread_chamfer=task.chamfer,
+        form=task.form, form_params=dict(task.params), n_starts=task.starts,
+        handedness=task.handedness, chamfer=task.chamfer,
         segments_per_turn=segments, clearance=clearance, seam_relief=relief_um * 1e-6,
         bolt_head_height=0.0,
-        nut_height=task.nut_height, nut_outer_diameter=2 * task.nut_outer_radius,
-        nut_shell_shape='cylinder', include_floor=False)
+        nut_height=task.nut_height, nut_size=2 * task.nut_outer_radius,
+        nut_shape='cylinder', floor=False)
     root = ET.fromstring(xml)
     meshes = {m.attrib['name']: np.fromstring(m.attrib['vertex'], sep=' ').reshape(-1, 3)
               for m in root.findall('./asset/mesh')}

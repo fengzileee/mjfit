@@ -101,6 +101,7 @@ def test_wall_offset_exact_and_one_sided_for_ours():
 def test_octree_sdf_sign():
     """MuJoCo's octree: negative inside the plate, positive in the hole."""
     import mujoco
+
     from benchmark.scene import build_scene
     from benchmark.wall import octree_sdf
     task = Task('circle')

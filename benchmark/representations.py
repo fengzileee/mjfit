@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import sys
+import os
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -21,8 +21,8 @@ import numpy as np
 
 from .geometry import Task, plate_mesh
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import mkpeg  # noqa: E402
+import mjfit
+from mjfit import shapes
 
 CACHE_DIR = Path(__file__).resolve().parent / 'cache'
 CACHE_VERSION = 1
@@ -44,16 +44,22 @@ class PlateRep:
         return self.method + '(' + ','.join(f'{k}={v}' for k, v in self.params.items()) + ')'
 
 
+def cache_path(task: Task, method: str, params: dict | None = None) -> Path:
+    key = json.dumps([CACHE_VERSION, task.key(), method, dict(params or {})], sort_keys=True)
+    return CACHE_DIR / f"{method}_{hashlib.sha1(key.encode()).hexdigest()[:16]}.npz"
+
+
 def build_plate(task: Task, method: str, params: dict | None = None,
                 use_cache: bool = True) -> PlateRep:
+    """The plate for one setting. use_cache: load the cached decomposition,
+    or build it and store it; False builds afresh and leaves the cache alone."""
     params = dict(params or {})
     if method == 'sdf':
         return PlateRep(method, params, sdf_mesh=plate_mesh(task))
     builders = {'ours': _ours, 'coacd': _coacd, 'vhacd': _vhacd}
     if method not in builders:
         raise ValueError(f"Unknown method {method!r}; known: {METHODS}")
-    key = json.dumps([CACHE_VERSION, task.key(), method, params], sort_keys=True)
-    path = CACHE_DIR / f"{method}_{hashlib.sha1(key.encode()).hexdigest()[:16]}.npz"
+    path = cache_path(task, method, params)
     if use_cache and path.exists():
         z = np.load(path)
         hulls = [z[f'hull_{i}'] for i in range(int(z['n']))]
@@ -61,9 +67,13 @@ def build_plate(task: Task, method: str, params: dict | None = None,
     t0 = time.perf_counter()
     hulls = builders[method](task, **params)
     rep = PlateRep(method, params, hulls=hulls, setup_s=time.perf_counter() - t0)
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    np.savez(path, n=len(hulls), setup_s=rep.setup_s,
-             **{f'hull_{i}': h for i, h in enumerate(hulls)})
+    if use_cache:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        # Atomic: parallel workers may load this path while it is being written.
+        tmp = path.with_name(f'{path.stem}.{os.getpid()}.tmp.npz')
+        np.savez(tmp, n=len(hulls), setup_s=rep.setup_s,
+                 **{f'hull_{i}': h for i, h in enumerate(hulls)})
+        tmp.replace(path)
     return rep
 
 
@@ -73,17 +83,16 @@ def circle_sides(radius: float, chord_error: float) -> int:
 
 
 def _ours(task: Task, chord_error_um: float | None = None) -> list[np.ndarray]:
-    """mkpeg's own pipeline: generate_xml, then read back the plate prisms."""
+    """mjfit's own pipeline: mjfit.peg, then read back the plate prisms."""
     if task.shape == 'circle':
-        n = circle_sides(task.size, chord_error_um * 1e-6)
-        hole = mkpeg._circle(task.size / math.cos(math.pi / n), n)
+        hole = shapes.circle(task.size, n=circle_sides(task.size, chord_error_um * 1e-6))
     else:
         a = task.size
         hole = np.array([[-a, -a], [a, -a], [a, a], [-a, a]])
-    xml = mkpeg.generate_xml(
-        hole_poly=hole, peg_clearance=1e-5, plate_size=2 * task.plate_half,
+    xml = mjfit.peg(
+        hole=hole, clearance=1e-5, plate_size=2 * task.plate_half,
         plate_thickness=task.thickness, peg_length=task.peg_length,
-        include_peg=False, include_floor=False, center_shapes=False)
+        include_peg=False, floor=False, center=False)
     meshes = ET.fromstring(xml).findall('./asset/mesh')
     return [np.fromstring(m.attrib['vertex'], sep=' ').reshape(-1, 3)
             for m in meshes if m.attrib['name'].startswith('plate_')]

@@ -1,10 +1,14 @@
-"""Run the passive-probe sweep on CPU MuJoCo and write one CSV per probe.
+"""Run the passive-probe sweep on CPU MuJoCo; rows go to results/peg/probes_cpu/.
 
-    python -m benchmark.run_probes                       # full sweep
+    python -m benchmark.run_probes                       # full sweep, configs/probes.yaml
     python -m benchmark.run_probes --shapes circle --methods ours sdf --probes lateral
+    python -m benchmark.run_probes --config benchmark/configs/circle_cpu.yaml \
+        --probes geometry memory lateral tilt            # extended circle sweep
 
 Decompositions are built once (cached in benchmark/cache), then every
 (representation, MULTICCD) job runs all selected probes in its own process.
+Rows are merged into the stored tables (see tables.py): a rerun replaces only
+the measurements it repeats.
 """
 from __future__ import annotations
 
@@ -20,10 +24,9 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-import pandas as pd
 import yaml
 
-from . import probes
+from . import probes, tables
 from .geometry import Task
 from .representations import build_plate
 from .scene import build_scene
@@ -93,7 +96,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--config', type=Path, default=HERE / 'configs' / 'probes.yaml')
-    ap.add_argument('--out', type=Path, default=HERE / 'results' / 'probes')
+    ap.add_argument('--results', type=Path, default=tables.ROOT,
+                    help='raw results root (default: benchmark/results)')
     ap.add_argument('--shapes', nargs='*')
     ap.add_argument('--methods', nargs='*')
     ap.add_argument('--probes', nargs='*', choices=PROBES, default=list(PROBES))
@@ -111,26 +115,28 @@ def main(argv=None):
                 jobs.append((task, method, params, multiccd))
     print(f'{len(reps)} plates, {len(jobs)} jobs on {args.workers} workers', flush=True)
 
-    tables: dict[str, list[dict]] = {p: [] for p in args.probes}
+    done: dict[int, dict[str, list[dict]]] = {}
     t0 = time.perf_counter()
     with ProcessPoolExecutor(args.workers) as pool:
         # Build and cache every decomposition first, in parallel (CoACD at fine
         # thresholds takes minutes each), so probe jobs only load the cache.
         list(pool.map(build_plate, *zip(*reps)))
         print(f'plates ready after {time.perf_counter() - t0:.0f}s', flush=True)
-        futures = {pool.submit(run_job, *job, cfg['probes'], args.probes): job for job in jobs}
+        futures = {pool.submit(run_job, *job, cfg['probes'], args.probes): j
+                   for j, job in enumerate(jobs)}
         for i, fut in enumerate(as_completed(futures), 1):
-            task, method, params, multiccd = futures[fut]
-            for probe, rows in fut.result().items():
-                tables[probe] += rows
+            task, method, params, multiccd = jobs[futures[fut]]
+            done[futures[fut]] = fut.result()
             print(f'[{i}/{len(jobs)} {time.perf_counter() - t0:6.0f}s] {task.shape} {method} '
                   f'{params} multiccd={multiccd}', flush=True)
 
-    args.out.mkdir(parents=True, exist_ok=True)
-    for probe, rows in tables.items():
+    out: dict[str, list[dict]] = {p: [] for p in args.probes}
+    for j in sorted(done):  # in job order, whatever order the jobs finished in
+        for probe, rows in done[j].items():
+            out[probe] += rows
+    for probe, rows in out.items():
         if rows:
-            pd.DataFrame(rows).to_csv(args.out / f'{probe}.csv', index=False)
-    print(f'wrote {args.out}')
+            print(f'wrote {tables.write(f"peg/probes_cpu/{probe}", rows, args.results)}')
 
 
 if __name__ == '__main__':

@@ -1,13 +1,17 @@
-"""Summaries and figures from the raw CSVs in benchmark/results/.
+"""Peg-in-hole summaries and figures from the raw tables in benchmark/results/.
 
-    python -m benchmark.report          # writes benchmark/report/ (tracked)
+    python -m benchmark.report                    # writes benchmark/report/ (tracked)
+    python -m benchmark.report --gpu-nworld 512 --out /tmp/report512
 
-Every table/figure is skipped if its input CSV is missing, so this can run on
-partial results.
+GPU timings are reported at one MuJoCo Warp batch size, --gpu-nworld (256 by
+default, as in the Pareto figures; the speed table lists every batch size
+measured). Every table/figure is skipped if its input table is missing, so
+this can run on partial results.
 """
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 import matplotlib
@@ -18,12 +22,14 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
+from . import tables  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 METHODS = ['ours', 'coacd', 'vhacd', 'sdf']
-NAMES = {'ours': 'ours (mkpeg)', 'coacd': 'CoACD', 'vhacd': 'V-HACD', 'sdf': 'SDF'}
+NAMES = {'ours': 'ours (mjfit)', 'coacd': 'CoACD', 'vhacd': 'V-HACD', 'sdf': 'SDF'}
 COLOR = {'ours': '#2a78d6', 'coacd': '#eb6834', 'vhacd': '#1baf7a', 'sdf': '#eda100'}
 MARKER = {'ours': 'o', 'coacd': 's', 'vhacd': '^', 'sdf': 'D'}
-GPU_NWORLD = 256  # Warp batch size the GPU timings are reported at
+GPU_NWORLD = 256  # default MuJoCo Warp batch size the GPU timings are reported at
 INK, INK2, MUTED, GRID, BASE = '#0b0b0b', '#52514e', '#898781', '#e1e0d9', '#c3c2b7'
 GOOD, BAD = '#0ca30c', '#d03b3b'
 
@@ -37,43 +43,43 @@ plt.rcParams.update({
 })
 
 
-def _read(path: Path) -> pd.DataFrame | None:
-    return pd.read_csv(path) if path.exists() else None
+PROBES_CPU = ('geometry', 'memory', 'static', 'drop', 'lateral', 'tilt', 'yaw')
+PROBES_GPU = ('lateral', 'tilt', 'drop')
 
 
-# Identity of one measurement; later folders win when a run was repeated.
-KEYS = ['shape', 'label', 'multiccd', 'scenario', 'nworld', 'clearance_um', 'friction',
-        'theta', 'phi_deg', 'gap_true_um']
+def load(root: Path = tables.ROOT) -> tuple[dict, dict]:
+    """(probes, speed) from the raw tables under root. probes: the CPU probes
+    by name, plus 'warp_<name>' for the MuJoCo Warp ones; speed: 'cpu_single'
+    and 'warp' (runs whose buffers overflowed are dropped: not physics)."""
+    p = {k: tables.read(f'peg/probes_cpu/{k}', root) for k in PROBES_CPU}
+    p.update({f'warp_{k}': tables.read(f'peg/probes_gpu/{k}', root) for k in PROBES_GPU})
+    speed = {'cpu_single': tables.read('peg/speed_cpu', root),
+             'warp': tables.read('peg/speed_gpu', root)}
+    if speed['warp'] is not None:
+        w = speed['warp']
+        speed['warp'] = w[~w.get('warp_invalid', False).fillna(False).astype(bool)]
+    return p, speed
 
 
-def _read_all(results: Path, pattern: str, name: str) -> pd.DataFrame | None:
-    """Concatenate `name` from every results/<pattern> folder (runs are split
-    across machines and shapes), dropping duplicate measurements."""
-    frames = [pd.read_csv(f) for f in sorted(results.glob(f'{pattern}/{name}'))]
-    if not frames:
-        return None
-    df = pd.concat(frames, ignore_index=True)
-    return df.drop_duplicates([k for k in KEYS if k in df], keep='last')
-
-
-def _config_labels() -> list[str]:
-    import yaml
-    from .representations import PlateRep
-    from .run_probes import rep_configs
-    cfg = yaml.safe_load((HERE / 'configs' / 'probes.yaml').read_text())
-    return [PlateRep(m, prm).label for shape in cfg['shapes']
-            for m, prm in rep_configs(cfg, shape, None)]
-
-
-CONFIG_ORDER = {lbl: i for i, lbl in enumerate(dict.fromkeys(_config_labels()))}
+def _knob(label: str) -> tuple:
+    """Coarse to fine within a method: chord error and CoACD threshold
+    falling, V-HACD hulls and voxels rising, SDF octree depth then contact
+    search effort rising."""
+    kv = {k: float(v) for k, v in re.findall(r'(\w+)=([\d.e+-]+)', label)}
+    if 'chord_error_um' in kv:
+        return (-kv['chord_error_um'],)
+    if 'threshold' in kv:
+        return (-kv['threshold'],)
+    if 'max_hulls' in kv:
+        return kv['max_hulls'], kv.get('resolution', 4e5)
+    return kv.get('depth', 0.0), kv.get('initpoints', 0.0)
 
 
 def _rep_order(df: pd.DataFrame) -> list[str]:
-    """Labels grouped by method, in config order within a method."""
+    """Labels grouped by method, coarse to fine within a method."""
     seen = []
     for m in METHODS:
-        labels = dict.fromkeys(df.loc[df.method == m, 'label'])
-        seen += sorted(labels, key=lambda lbl: CONFIG_ORDER.get(lbl, len(CONFIG_ORDER)))
+        seen += sorted(dict.fromkeys(df.loc[df.method == m, 'label']), key=_knob)
     return seen
 
 
@@ -115,7 +121,7 @@ def onset_error(static: pd.DataFrame) -> np.ndarray:
 
 
 def summarize(p: dict[str, pd.DataFrame], speed: dict[str, pd.DataFrame], shape: str,
-              c_ref: float = 100.0) -> pd.DataFrame:
+              c_ref: float = 100.0, nworld: int = GPU_NWORLD) -> pd.DataFrame:
     rows = []
     base = next(p[k] for k in ('lateral', 'static', 'drop', 'tilt') if p.get(k) is not None)
     for label in _rep_order(base[base['shape'] == shape]):
@@ -138,17 +144,21 @@ def summarize(p: dict[str, pd.DataFrame], speed: dict[str, pd.DataFrame], shape:
                 sd = contact_sd(p, shape, label, c, mccd)
                 r[f'contact sd c={c:g}: false gap / pen um'] = (
                     'filled' if sd is None else f'{sd[0]:.1f} / {sd[1]:.1f}')
+            # S0 and S1 run on the main sweep only: 'not run' for the rest.
             if p.get('static') is not None:
-                err = onset_error(sel(p['static']))
+                s0 = sel(p['static'])
+                err = onset_error(s0)
                 r['S0 onset err um [min,max]'] = (
-                    f'[{err.min():+.1f}, {err.max():+.1f}]' if len(err) else 'none')
+                    f'[{err.min():+.1f}, {err.max():+.1f}]' if len(err)
+                    else 'none' if len(s0) else 'not run')
             if p.get('drop') is not None:
                 d = sel(p['drop'])
                 for fr, tag in ((True, 'S1 wrong (fric)'), (False, 'S1 wrong (no fric)')):
                     dd = d[d.friction == fr].sort_values('clearance_um')
                     wrong = dd[dd.outcome != dd.expected]
-                    r[tag] = ', '.join(f'{c:+g}{o[0]}' for c, o in
-                                       zip(wrong.clearance_um, wrong.outcome)) or '-'
+                    r[tag] = (', '.join(f'{c:+g}{o[0]}' for c, o in
+                                        zip(wrong.clearance_um, wrong.outcome)) or '-'
+                              ) if len(dd) else 'not run'
             if p.get('lateral') is not None:
                 lat = sel(p['lateral'])
                 # Centered peg already intersecting the plate: the clearance is gone.
@@ -188,10 +198,50 @@ def summarize(p: dict[str, pd.DataFrame], speed: dict[str, pd.DataFrame], shape:
                         & (cs.scenario == 'wall')]
                 if len(cc):
                     r['CPU us/step (wall)'] = round(float(cc.us_per_step.iloc[0]), 1)
-            gpu = _cost(speed, shape, label, 'gpu', mccd=mccd)
+            gpu = _cost(speed, shape, label, 'gpu', mccd=mccd, nworld=nworld)
             if gpu is not None:
-                r[f'GPU us/env-step @{GPU_NWORLD} (wall)'] = round(gpu, 2)
+                r[f'GPU us/env-step @{nworld} (wall)'] = round(gpu, 2)
             rows.append(r)
+    return pd.DataFrame(rows)
+
+
+def _sig(x: float | None, digits: int = 3) -> float:
+    return float(f'{x:.{digits}g}') if x is not None and np.isfinite(x) else np.nan
+
+
+def speed_table(p: dict, speed: dict, scenario: str = 'wall') -> pd.DataFrame:
+    """Real-time factor (simulated time / wall time at the 1 ms step) per
+    setting and MULTICCD: CPU (1 env, 1 thread) and GPU summed over each
+    measured Warp batch size, with the worst settled error over S2-S4 on CPU
+    at c = 100 and 20 µm ('filled': the representation fills the clearance)."""
+    cs, warp = speed.get('cpu_single'), speed.get('warp')
+    if p.get('lateral') is None or cs is None:
+        return pd.DataFrame()
+    nworlds = sorted(set(warp.nworld.dropna().astype(int))) if warp is not None else []
+    rows = []
+    for shape in ('circle', 'square'):
+        lat = p['lateral'][p['lateral']['shape'] == shape]
+        for label in _rep_order(lat):
+            m = lat.loc[lat.label == label, 'method'].iloc[0]
+            for mccd in (True, False) if m != 'sdf' else (True,):
+                cpu = _cost(speed, shape, label, 'cpu', scenario, mccd)
+                if cpu is None:
+                    continue
+                r = {'shape': shape, 'representation': label,
+                     'multiccd': 'on' if mccd else 'off',
+                     'hulls': int(lat.loc[lat.label == label, 'n_hulls'].iloc[0]),
+                     'CPU real-time factor': _sig(1e3 / cpu)}
+                for n in nworlds:
+                    g = warp[(warp['shape'] == shape) & (warp.label == label)
+                             & (warp.multiccd == mccd) & (warp.scenario == scenario)
+                             & (warp.nworld == n)].dropna(subset=['realtime_factor'])
+                    r[f'GPU real-time factor @{n}'] = (
+                        _sig(float(g.realtime_factor.iloc[0])) if len(g) else np.nan)
+                for c in (100.0, 20.0):
+                    acc = _accuracy(p, shape, label, c, mccd)
+                    r[f'worst error c={c:g} um'] = ('' if acc is None else 'filled' if acc[1]
+                                                    else f'{acc[0]:.2f}')
+                rows.append(r)
     return pd.DataFrame(rows)
 
 
@@ -328,9 +378,9 @@ def fig_drop(p, shape, out):
     plt.close(fig)
 
 
-def fig_speed(speed, out, scenario='wall'):
+def fig_speed(speed, out, scenario='wall', nworld=GPU_NWORLD):
     """Per representation: CPU µs per step (1 env, 1 thread; ring = collision
-    share) and GPU µs per env-step with GPU_NWORLD Warp worlds."""
+    share) and GPU µs per env-step with nworld Warp worlds."""
     cs = speed.get('cpu_single')
     if cs is None:
         return
@@ -344,7 +394,7 @@ def fig_speed(speed, out, scenario='wall'):
             for yi, label in zip(y, labels):
                 m = d[d.label == label].method.iloc[0]
                 c = COLOR[m]
-                v = _cost(speed, shape, label, backend, scenario)
+                v = _cost(speed, shape, label, backend, scenario, nworld=nworld)
                 if v is None:
                     continue
                 if backend == 'cpu':
@@ -366,7 +416,7 @@ def fig_speed(speed, out, scenario='wall'):
                 ax.set_xlabel('CPU µs per step, 1 env, 1 thread  (ring = collision only)')
                 ax.set_title(f'{shape}: CPU, "{scenario}" scenario', loc='left')
             else:
-                ax.set_xlabel(f'GPU µs per env-step, {GPU_NWORLD} Warp worlds')
+                ax.set_xlabel(f'GPU µs per env-step, {nworld} Warp worlds')
                 ax.set_title(f'{shape}: GPU (MuJoCo Warp)', loc='left')
     fig.tight_layout()
     fig.savefig(out / 'speed.png', dpi=160)
@@ -389,8 +439,8 @@ def _accuracy(p, shape, label, c_ref, mccd=True, backend='cpu'):
     return max(max(x.error_um.abs().max() for x in parts), 0.05), False
 
 
-def _cost(speed, shape, label, backend, scenario='wall', mccd=True):
-    """CPU: µs per step on 1 thread. GPU: µs per env-step at GPU_NWORLD Warp worlds."""
+def _cost(speed, shape, label, backend, scenario='wall', mccd=True, nworld=GPU_NWORLD):
+    """CPU: µs per step on 1 thread. GPU: µs per env-step at nworld Warp worlds."""
     if backend == 'cpu':
         df = speed.get('cpu_single')
         col, scale = 'us_per_step', 1.0
@@ -402,7 +452,7 @@ def _cost(speed, shape, label, backend, scenario='wall', mccd=True):
     pick = df[(df['shape'] == shape) & (df.label == label) & (df.multiccd == mccd)
               & (df.scenario == scenario)]
     if backend == 'gpu':
-        pick = pick[pick.nworld == GPU_NWORLD]
+        pick = pick[pick.nworld == nworld]
     pick = pick.dropna(subset=[col])
     if pick.empty:
         return None
@@ -424,7 +474,6 @@ def _pareto_front(pts):
 def _setting_tag(label: str, mccd: bool) -> str:
     """Short on-plot label for a front point: the method's knob values, plus
     MULTICCD off."""
-    import re
     from .representations import circle_sides
     kv = dict(re.findall(r'(\w+)=([\d.e+-]+)', label))
     if 'chord_error_um' in kv:
@@ -442,11 +491,11 @@ def _setting_tag(label: str, mccd: bool) -> str:
     return tag + (', off' if not mccd else '')
 
 
-def _xval(p, speed, shape, label, xkind, mccd):
+def _xval(p, speed, shape, label, xkind, mccd, nworld=GPU_NWORLD):
     """x for a Pareto point: 'cpu' / 'gpu' compute time, or 'memory' (compiled
     model size, MB; identical for both MULTICCD settings)."""
     if xkind != 'memory':
-        return _cost(speed, shape, label, xkind, mccd=mccd)
+        return _cost(speed, shape, label, xkind, mccd=mccd, nworld=nworld)
     mem = p.get('memory')
     if mem is None:
         return None
@@ -455,7 +504,7 @@ def _xval(p, speed, shape, label, xkind, mccd):
 
 
 XLABEL = {'cpu': 'CPU µs per step, 1 env, 1 thread',
-          'gpu': f'GPU µs per env-step, {GPU_NWORLD} Warp worlds',
+          'gpu': 'GPU µs per env-step, {nworld} Warp worlds',
           'memory': 'compiled model memory (MB)'}
 
 
@@ -465,7 +514,7 @@ LABEL_OFFSET = {'ours': (5, -8, 'left'), 'coacd': (5, -9, 'left'),
                 'vhacd': (5, 8, 'left'), 'sdf': (-5, 8, 'right')}
 
 
-def _pareto_points(p, speed, backend, shape, c_ref, method):
+def _pareto_points(p, speed, backend, shape, c_ref, method, nworld=GPU_NWORLD):
     """(x, error, clearance filled?, label, multiccd) for each setting of one
     method: its granularity knob x MULTICCD (SDF ignores MULTICCD). On the GPU
     axis the error is measured on Warp too."""
@@ -473,16 +522,16 @@ def _pareto_points(p, speed, backend, shape, c_ref, method):
     pts = []
     for label in _rep_order(lat[(lat['shape'] == shape) & (lat.method == method)]):
         for mccd in (True, False) if method != 'sdf' else (True,):
-            cost = _xval(p, speed, shape, label, backend, mccd)
+            cost = _xval(p, speed, shape, label, backend, mccd, nworld)
             acc = _accuracy(p, shape, label, c_ref, mccd, backend)
             if cost is not None and acc is not None:
                 pts.append((cost, *acc, label, mccd))
     return pts
 
 
-def _pareto_panel(ax, p, speed, backend, shape, c_ref):
+def _pareto_panel(ax, p, speed, backend, shape, c_ref, nworld=GPU_NWORLD):
     for m in METHODS:
-        pts = _pareto_points(p, speed, backend, shape, c_ref, m)
+        pts = _pareto_points(p, speed, backend, shape, c_ref, m, nworld)
         if not pts:
             continue
         front = _pareto_front(pts)
@@ -518,19 +567,20 @@ def _pareto_panel(ax, p, speed, backend, shape, c_ref):
     ax.text(0.99, c_ref * 1.12, 'error = clearance; hollow = clearance filled',
             transform=ax.get_yaxis_transform(), fontsize=7.5, color=MUTED,
             va='bottom', ha='right')
-    ax.set_xlabel(XLABEL[backend])
+    ax.set_xlabel(XLABEL[backend].format(nworld=nworld))
     ax.set_ylabel('worst |error| over S2–S4 (µm)' + (', on Warp' if backend == 'gpu' else ''))
     ax.set_title(f'{shape}, c = {c_ref:g} µm (clearance ratio {ratio(c_ref)})'
                  + ('' if backend == 'memory' else f', {backend.upper()}'), loc='left')
 
 
-def fig_pareto(p, speed, out, layout, name):
+def fig_pareto(p, speed, out, layout, name, nworld=GPU_NWORLD):
     """Compute time vs error: each method is its Pareto front over all its
     settings (lower-left is better). layout: rows of (backend, shape, c_um)."""
     if p.get('lateral') is None:
         return
     layout = [[cell for cell in row
-               if any(_pareto_points(p, speed, *cell, m) for m in METHODS)] for row in layout]
+               if any(_pareto_points(p, speed, *cell, m, nworld) for m in METHODS)]
+              for row in layout]
     layout = [row for row in layout if row]
     if not layout:
         return
@@ -539,7 +589,7 @@ def fig_pareto(p, speed, out, layout, name):
                              figsize=(6.2 * ncol, 4.8 * len(layout)))
     for r, row in enumerate(layout):
         for c, cell in enumerate(row):
-            _pareto_panel(axes[r][c], p, speed, *cell)
+            _pareto_panel(axes[r][c], p, speed, *cell, nworld)
         for c in range(len(row), ncol):
             axes[r][c].set_visible(False)
     handles = [plt.Line2D([], [], color=COLOR[m], marker=MARKER[m], lw=1.5, label=NAMES[m])
@@ -608,43 +658,51 @@ def fig_backends(p, out, c_ref=100.0):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--results', type=Path, default=HERE / 'results')
-    ap.add_argument('--probes', default='probes', help='probe results subfolder')
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--results', type=Path, default=tables.ROOT,
+                    help='raw results root (default: benchmark/results)')
     ap.add_argument('--out', type=Path, default=HERE / 'report')
+    ap.add_argument('--gpu-nworld', type=int, default=GPU_NWORLD,
+                    help='MuJoCo Warp batch size of the GPU timings in the summaries and '
+                         'figures (measured: 256 and 512)')
+    ap.add_argument('--no-figures', action='store_true', help='tables only')
     args = ap.parse_args(argv)
-    out = args.out
+    out, nw = args.out, args.gpu_nworld
     out.mkdir(parents=True, exist_ok=True)
-    p = {k: _read_all(args.results, f'{args.probes}*', f'{k}.csv')
-         for k in ('geometry', 'memory', 'static', 'drop', 'lateral', 'tilt', 'yaw')}
-    p.update({k: _read_all(args.results, 'probes*', f'{k}.csv')
-              for k in ('warp_lateral', 'warp_tilt', 'warp_drop')})
-    speed = {k: _read_all(args.results, 'speed*', f'{k}.csv')
-             for k in ('cpu_single', 'warp')}
-    if speed['warp'] is not None:  # overflowed runs dropped contacts: not physics
-        w = speed['warp']
-        speed['warp'] = w[~w.get('warp_invalid', False).fillna(False).astype(bool)]
+    p, speed = load(args.results)
+    figures = not args.no_figures
     md = ['# Collision-representation benchmark: summary\n']
     for shape in ('circle', 'square'):
         if p['lateral'] is None or shape not in set(p['lateral']['shape']):
             continue
-        table = summarize(p, speed, shape)
+        table = summarize(p, speed, shape, nworld=nw)
         table.to_csv(out / f'summary_{shape}.csv', index=False)
         md += [f'## {shape}\n', table.to_markdown(index=False), '\n']
-        for mccd in (True, False):
+        for mccd in (True, False) if figures else ():
             fig_accuracy(p, shape, out, mccd=mccd)
-        fig_drop(p, shape, out)
-    fig_speed(speed, out)
-    fig_pareto(p, speed, out, [[('cpu', 'circle', 100.0), ('cpu', 'circle', 20.0)]],
-               'pareto_cpu_circle.png')
-    fig_pareto(p, speed, out, [[('memory', 'circle', 100.0), ('memory', 'circle', 20.0)]],
-               'pareto_memory_circle.png')
-    fig_pareto(p, speed, out, [[('gpu', 'circle', 100.0), ('gpu', 'circle', 20.0)]],
-               'pareto_gpu_circle.png')
-    for c in (100.0, 20.0):
-        fig_pareto(p, speed, out, [[(b, shape, c) for shape in ('circle', 'square')]
-                                   for b in ('cpu', 'gpu')], f'pareto_c{c:g}.png')
-    fig_backends(p, out)
+        if figures:
+            fig_drop(p, shape, out)
+    st = speed_table(p, speed)
+    if len(st):
+        st.to_csv(out / 'speed_table.csv', index=False)
+        (out / 'speed_table.md').write_text(
+            '# Real-time factor at the 1 ms step, "wall" scenario\n\n'
+            'CPU: one environment on one thread. GPU: summed over the MuJoCo Warp batch. '
+            'Worst error: worst settled |error| over S2-S4 on CPU, µm.\n\n'
+            + st.to_markdown(index=False) + '\n')
+    if figures:
+        fig_speed(speed, out, nworld=nw)
+        fig_pareto(p, speed, out, [[('cpu', 'circle', 100.0), ('cpu', 'circle', 20.0)]],
+                   'pareto_cpu_circle.png', nw)
+        fig_pareto(p, speed, out, [[('memory', 'circle', 100.0), ('memory', 'circle', 20.0)]],
+                   'pareto_memory_circle.png', nw)
+        fig_pareto(p, speed, out, [[('gpu', 'circle', 100.0), ('gpu', 'circle', 20.0)]],
+                   'pareto_gpu_circle.png', nw)
+        for c in (100.0, 20.0):
+            fig_pareto(p, speed, out, [[(b, shape, c) for shape in ('circle', 'square')]
+                                       for b in ('cpu', 'gpu')], f'pareto_c{c:g}.png', nw)
+        fig_backends(p, out)
     (out / 'summary.md').write_text('\n'.join(md))
     print(f'wrote {out}')
 

@@ -72,7 +72,7 @@ pattern = '\]\(#([^)]+)\)'
 replacement = '](https://github.com/younghyopark/mjfit#\1)'
 
 [tool.hatch.build.targets.sdist]
-include = ["src/mjfit", "tests", "README.md", "LICENSE"]
+include = ["src/mjfit", "README.md", "LICENSE", "CITATION.cff"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

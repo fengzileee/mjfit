@@ -1,12 +1,14 @@
 """Run the bolt/nut sweep: probes (accuracy) or speed (CPU time per step).
 
     python -m benchmark.thread.run --parts probes           # all probes, all settings
-    python -m benchmark.thread.run --parts speed --workers 1  # timing: idle machine
+    python -m benchmark.thread.run --parts speed             # timing: idle machine
     python -m benchmark.thread.run --methods ours --clearance 100 --probes axial screw
 
 Every (representation, clearance) is built in its own process (cached on
 disk) and its probe jobs, one per MULTICCD setting, start as soon as it is
-ready, so slow decompositions do not hold up the rest.
+ready, so slow decompositions do not hold up the rest. Rows go to
+results/thread/probes_cpu/<probe> and results/thread/speed_cpu, merged into
+the stored tables after every job.
 """
 from __future__ import annotations
 
@@ -23,9 +25,9 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
-import pandas as pd
 import yaml
 
+from .. import tables
 from . import probes as T
 from .geometry import ThreadTask
 from .representations import build_thread, cache_path, exact_meshes
@@ -133,14 +135,15 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--config', type=Path, default=HERE / 'configs' / 'thread.yaml')
-    ap.add_argument('--out', type=Path, default=HERE / 'results' / 'thread')
+    ap.add_argument('--results', type=Path, default=tables.ROOT,
+                    help='raw results root (default: benchmark/results)')
     ap.add_argument('--parts', nargs='*', choices=['probes', 'speed'], default=['probes'])
     ap.add_argument('--methods', nargs='*')
     ap.add_argument('--clearance', nargs='*', type=float, help='µm; default from config')
     ap.add_argument('--probes', nargs='*', choices=PROBES, default=list(PROBES))
     ap.add_argument('--workers', type=int, default=max(1, (os.cpu_count() or 2) - 2))
     ap.add_argument('--resume', action='store_true',
-                    help='keep the results in --out and run only the jobs missing from them')
+                    help='run only the jobs missing from the stored tables')
     ap.add_argument('--only-cached', action='store_true',
                     help='skip CoACD / V-HACD settings whose decomposition is not cached yet')
     args = ap.parse_args(argv)
@@ -154,14 +157,12 @@ def main(argv=None):
                 if r[1] in ('ours', 'sdf', 'sdf_analytic') or cache_path(*r).exists()]
     jobs = [(task, m, p, c, mccd) for (task, m, p, c) in reps
             for mccd in (cfg['multiccd'] if not m.startswith('sdf') else [True])]
-    tables: dict[str, list[dict]] = {}
     if args.resume:
-        for f in args.out.glob('*.csv'):
-            tables[f.stem] = pd.read_csv(f).to_dict('records')
-        key = (next(p for p in args.probes if p != 'memory') if 'probes' in args.parts
-               else 'cpu_single')
-        done = {(r['label'], round(r['clearance_um'], 6), bool(r['multiccd']))
-                for r in tables.get(key, [])}
+        name = (f'thread/probes_cpu/{next(p for p in args.probes if p != "memory")}'
+                if 'probes' in args.parts else 'thread/speed_cpu')
+        have = tables.read(name, args.results)
+        done = set() if have is None else {
+            (r.label, round(r.clearance_um, 6), bool(r.multiccd)) for r in have.itertuples()}
         jobs = [j for j in jobs if (label(j[1], j[2]), round(j[3] * 1e6, 6), j[4]) not in done]
         reps = [r for r in reps if any(j[1:4] == r[1:] for j in jobs)]
     print(f'{len(reps)} representations, {len(jobs)} jobs on {args.workers} workers', flush=True)
@@ -181,12 +182,6 @@ def main(argv=None):
     if any(r[1] == 'sdf_analytic' for r in reps):
         from . import plugin
         plugin.library()  # compile before the workers need it
-    def write():  # after every job, so a crash late in the sweep loses nothing
-        args.out.mkdir(parents=True, exist_ok=True)
-        for name, rows in tables.items():
-            if rows:
-                pd.DataFrame(rows).to_csv(args.out / f'{name}.csv', index=False)
-
     def record(part, job, fut, i, n):
         task_, m, p, c, mccd = job
         try:
@@ -194,12 +189,13 @@ def main(argv=None):
         except Exception as e:  # keep the sweep going; record the failure
             print(f'FAILED {part} {m} {p} c={c * 1e6:g} mccd={mccd}: {e!r}', flush=True)
             return
+        # Stored after every job, so a crash late in the sweep loses nothing.
         if part == 'probes':
             for probe, rows in res.items():
-                tables.setdefault(probe, []).extend(rows)
+                if rows:
+                    tables.write(f'thread/probes_cpu/{probe}', rows, args.results)
         else:
-            tables.setdefault('cpu_single', []).append(res)
-        write()
+            tables.write('thread/speed_cpu', [res], args.results)
         print(f'[{part} {i}/{n} {time.perf_counter() - t0:6.0f}s] {m} {p} '
               f'c={c * 1e6:g} multiccd={mccd}', flush=True)
 
@@ -232,8 +228,7 @@ def main(argv=None):
             for i, fut in enumerate(as_completed(futures), 1):
                 record('speed', futures[fut], fut, i, len(futures))
 
-    write()
-    print(f'wrote {args.out}')
+    print(f'wrote {tables.path("thread/*", args.results).parent}')
 
 
 if __name__ == '__main__':

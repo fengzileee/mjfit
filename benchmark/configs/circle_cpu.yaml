@@ -1,10 +1,15 @@
-# Extended CPU sweep on the circle: finer V-HACD and SDF settings so each
+# Extended sweep on the circle: finer CoACD, V-HACD and SDF settings, so each
 # method traces its whole speed-accuracy curve down to where it saturates.
-# Adds to configs/probes.yaml (same task); run only the probes the Pareto uses:
-#   python -m benchmark.run_probes --config benchmark/configs/circle_cpu.yaml \
-#       --probes geometry lateral tilt --out benchmark/results/probes_circle_ext
-#   python -m benchmark.run_speed --config benchmark/configs/circle_cpu.yaml \
-#       --parts cpu_single --scenarios wall --out benchmark/results/speed_circle_ext
+# Adds to configs/probes.yaml (same task) and runs only what the Pareto
+# fronts use (python -m benchmark.reproduce runs these in its stages):
+#   CPU:  python -m benchmark.run_probes --config benchmark/configs/circle_cpu.yaml \
+#             --probes geometry memory lateral tilt
+#         python -m benchmark.run_speed --config benchmark/configs/circle_cpu.yaml \
+#             --parts cpu_single --scenarios wall
+#   GPU:  python -m benchmark.run_warp_probes --config benchmark/configs/circle_cpu.yaml \
+#             --probes lateral tilt --clearances 100 20
+#         python -m benchmark.run_speed --config benchmark/configs/circle_cpu.yaml \
+#             --parts warp --scenarios wall --nworlds 256
 
 task:
   size: 0.008
@@ -24,7 +29,7 @@ methods:
     - {max_hulls: 4096, resolution: 20000000, min_error: 0.1, max_depth: 14}
     - {max_hulls: 4096, resolution: 60000000, min_error: 0.1, max_depth: 14}
     - {max_hulls: 4096, resolution: 120000000, min_error: 0.1, max_depth: 14}
-  sdf:          # depth 9: 5M octree nodes, 31 s compile; depth 10: 20M nodes, 105 s, 13 GB
+  sdf:          # depth 9: 5M octree nodes, 24 s compile; depth 10: 20M nodes, 108 s, 13 GB RAM
     - {depth: 9}
     - {depth: 10}
     - {depth: 9, initpoints: 100, iterations: 30}

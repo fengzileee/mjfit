@@ -3,7 +3,7 @@
 The bolt is fixed in the world with its thread axis along z. The nut is the
 moving part: it starts centred in its play (frames on the pitch grid) and
 moves on the probe's joints. Options and contact parameters are the peg
-benchmark's (mkpeg / mkscrew defaults). The nut's mass and inertia are those of
+benchmark's (mjfit's default solref and solimp). The nut's mass and inertia are those of
 the exact nut, set explicitly, so representations differ only in contact.
 """
 from __future__ import annotations

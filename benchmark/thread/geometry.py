@@ -1,7 +1,7 @@
 """Exact geometry of a bolt and nut, and the geometric ground truth.
 
-The parts are the ones mkscrew.py intends to build: an ISO 68-1 thread whose
-teeth are shrunk by c/2 (radially at the crest, along the normal on each
+The parts are the ones mjfit.thread intends to build: an ISO 68-1 thread
+whose teeth are shrunk by c/2 (radially at the crest, along the normal on each
 flank), so that facing flanks are c apart when the nut is centred. A thread is
 a meridian profile swept along a helix, so a point (r, phi, z) is inside it
 exactly when (r, u) lies in the profile, with u = z - P * phi / 2pi taken
@@ -16,15 +16,12 @@ by a whole number of pitches (and no rotation) put the nut centred in its play.
 from __future__ import annotations
 
 import math
-import sys
 from dataclasses import asdict, dataclass
 from functools import lru_cache
-from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-import mkscrew  # noqa: E402
+from mjfit import _polygon, _thread
 
 @dataclass(frozen=True)
 class ThreadTask:
@@ -35,13 +32,13 @@ class ThreadTask:
     nut_outer_radius: float = 0.008
     density: float = 7800.0
     shape: str = 'thread'           # row label shared with the peg tables
-    # mkscrew thread form and its thread_params, as sorted (key, value) pairs
+    # mjfit thread form and its form_params, as sorted (key, value) pairs
     # (values hashable: tuples, not lists).
     form: str = 'iso'
     form_params: tuple = ()
     starts: int = 1                 # threads per pitch window: lead = starts * pitch
     handedness: str = 'right'
-    chamfer: float = 0.0            # mkscrew's thread_chamfer (both rod ends, both nut faces)
+    chamfer: float = 0.0            # mjfit.thread's chamfer (both rod ends, both nut faces)
 
     def key(self) -> dict:
         d = asdict(self)
@@ -69,7 +66,7 @@ class ThreadTask:
         return dict(self.form_params)
 
     @property
-    def profile(self) -> 'mkscrew.ThreadProfile':
+    def profile(self) -> '_thread.ThreadProfile':
         return _profile(self)
 
     @property
@@ -99,14 +96,14 @@ class ThreadTask:
 
 @lru_cache(maxsize=64)
 def _profile(task: ThreadTask):
-    return mkscrew.thread_profile(task.form, task.major_diameter, task.pitch, task.params)
+    return _thread.thread_profile(task.form, task.major_diameter, task.pitch, task.params)
 
 
 @lru_cache(maxsize=256)
 def _teeth(task: ThreadTask, c: float):
-    """mkscrew's (bolt, nut) teeth as (dr, u): dr from the core for the bolt,
+    """mjfit's (bolt, nut) teeth as (dr, u): dr from the core for the bolt,
     from the root for the nut; u in the bolt's phase for both. Each is
-    base-left, base-right, then on around (see mkscrew._canonical)."""
+    base-left, base-right, then on around (see mjfit._thread._canonical)."""
     prof = _profile(task)
     bolt, nut = prof.teeth(c)
     return bolt - [prof.r_core, 0], nut - [prof.r_root, 0]
@@ -132,7 +129,7 @@ def nut_tooth(task: ThreadTask, c: float) -> np.ndarray:
 def _polygon_sd(q: np.ndarray, poly: np.ndarray) -> np.ndarray:
     """Exact signed distance from points q (N, 2) to a polygon (convex, or
     any simple one: see _polygon_sd_general)."""
-    if not mkscrew._is_convex_poly(poly):
+    if not _polygon.is_convex(poly):
         return _polygon_sd_general(q, poly)
     area = 0.5 * np.sum(poly[:, 0] * np.roll(poly[:, 1], -1) - np.roll(poly[:, 0], -1) * poly[:, 1])
     if area < 0:
@@ -213,7 +210,7 @@ def nut_sdf(task: ThreadTask, c: float, p: np.ndarray) -> np.ndarray:
 
 def _chamfer_slopes(task: ThreadTask, c: float):
     """Radial slopes of the bolt's chamfer (core to crest over the chamfer
-    length) and of the nut's countersink (bore to tooth tips), as mkscrew
+    length) and of the nut's countersink (bore to tooth tips), as mjfit
     cuts them."""
     bolt, nut = _teeth(task, c)
     return (bolt[:, 0].max() / task.chamfer,
@@ -382,10 +379,10 @@ def spin_down_accel(task: ThreadTask, mass: float, inertia_axis: float) -> float
 
 def _pieces(poly: np.ndarray) -> list:
     """Convex pieces of a tooth (itself when convex)."""
-    if mkscrew._is_convex_poly(poly):
+    if _polygon.is_convex(poly):
         return [poly]
-    ccw = poly if mkscrew._signed_area(poly) > 0 else poly[::-1]
-    return [ccw[ix] for ix in mkscrew._convex_partition(ccw)]
+    ccw = poly if _polygon.signed_area(poly) > 0 else poly[::-1]
+    return [ccw[ix] for ix in _thread._convex_partition(ccw)]
 
 
 def _apart(a: np.ndarray, b: np.ndarray) -> bool:
@@ -526,11 +523,11 @@ def tip_window(task: ThreadTask, c: float):
 
 def _convex_overlap(a: np.ndarray, b: np.ndarray) -> np.ndarray | None:
     """Intersection of two convex polygons (either winding), or None."""
-    out = mkscrew._ensure_ccw(a)
-    b = mkscrew._ensure_ccw(b)
+    out = _polygon.ensure_ccw(a)
+    b = _polygon.ensure_ccw(b)
     for p, q in zip(b, np.roll(b, -1, axis=0)):
         n = np.array([q[1] - p[1], p[0] - q[0]])     # outward, for CCW
-        out = mkscrew._clip_halfplane(out, n, n @ p)
+        out = _thread._clip_halfplane(out, n, n @ p)
         if out is None:
             return None
     return out
@@ -864,12 +861,12 @@ def _cap_triangles(profile: np.ndarray) -> list:
     """Triangles (vertex indices, in the profile's own winding) covering the
     profile: a fan for a convex one, fans of its convex pieces otherwise."""
     m = len(profile)
-    if mkscrew._is_convex_poly(profile):
+    if _polygon.is_convex(profile):
         return [(0, j, j + 1) for j in range(1, m - 1)]
-    flip = mkscrew._signed_area(profile) < 0
+    flip = _polygon.signed_area(profile) < 0
     ccw = profile[::-1] if flip else profile
     out = []
-    for ix in mkscrew._convex_partition(ccw):
+    for ix in _thread._convex_partition(ccw):
         ix = [m - 1 - i for i in ix][::-1] if flip else ix     # back to profile indices
         out += [(ix[0], ix[j], ix[j + 1]) for j in range(1, len(ix) - 1)]
     return out

@@ -326,10 +326,9 @@ def _tag(method: str, params: dict, multiccd: bool, n_pieces: int) -> str:
 
 
 def _metrics() -> dict:
-    """label -> (CPU µs/step, model MB, {c: (error µm, filled)}) from results/."""
-    res = HERE / 'results'
-    p = {k: R._read_all(res, 'probes*', f'{k}.csv') for k in ('memory', 'lateral', 'tilt', 'yaw')}
-    speed = {'cpu_single': R._read_all(res, 'speed*', 'cpu_single.csv')}
+    """label -> (CPU µs/step, model MB, {c: (error µm, filled)}) from the raw
+    results (benchmark/results/peg/)."""
+    p, speed = R.load()
     out = {}
     for method, params, mccd in POINTS:
         label = PlateRep(method, params).label

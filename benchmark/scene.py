@@ -1,7 +1,7 @@
 """Common MjSpec scaffold shared by every representation and probe.
 
 Everything except the plate's collision geometry is identical across methods:
-options, contact parameters (mkpeg defaults), the exact primitive peg, and the
+options, contact parameters (mjfit.peg's defaults), the exact primitive peg, and the
 probe's joints. Scenes are built with MjSpec because the SDF octree depth only
 exists on the spec, and meshes are passed as arrays (not files) so MuJoCo's
 file-keyed mesh cache cannot hand back an octree built at another depth.
@@ -18,7 +18,7 @@ import numpy as np
 from .geometry import Task
 from .representations import PlateRep
 
-# mkpeg's default contact parameters.
+# mjfit.peg's default contact parameters.
 SOLREF = (0.002, 1.0)
 SOLIMP = (0.99, 0.999, 0.001, 0.5, 2.0)
 FRICTION = (1.0, 0.01, 0.001)

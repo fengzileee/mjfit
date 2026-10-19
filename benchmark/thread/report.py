@@ -1,6 +1,7 @@
 """Bolt/nut tables and figures -> report/ (thread_*.png, thread_summary.md).
 
-    python -m benchmark.thread.report
+    python -m benchmark.thread.report               # from benchmark/results/thread/
+    python -m benchmark.thread.report --traces      # + thread_start.png (re-simulates)
 """
 from __future__ import annotations
 
@@ -16,27 +17,24 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from .. import report as R  # noqa: E402  (shared style, colors, Pareto helper)
+from .. import tables  # noqa: E402
 
 HERE = Path(__file__).resolve().parents[1]
 # The thread benchmark adds a fifth method: the exact parts as an analytic SDF.
 METHODS = R.METHODS + ['sdf_analytic']
-NAMES = {**R.NAMES, 'ours': 'ours (mkscrew)', 'sdf_analytic': 'SDF, analytic (exact shape)'}
+NAMES = {**R.NAMES, 'ours': 'ours (mjfit)', 'sdf_analytic': 'SDF, analytic (exact shape)'}
 COLOR = {**R.COLOR, 'sdf_analytic': '#8a5cc8'}
 MARKER = {**R.MARKER, 'sdf_analytic': 'v'}
 SPIN_T = 0.8  # T5 duration (s)
 YMAX_OVER_C = 5  # Pareto y axis stops at 5 x clearance; blow-ups sit on the edge
-KEYS = ['label', 'multiccd', 'clearance_um', 'direction', 'theta', 'phi_deg', 'friction',
-        'scenario', 'torque_ratio', 'turns', 'kind', 'angle_deg', 'mu', 'load_N', 'condim',
-        'cone', 'timestep_ms']
 ACCURACY = ('axial', 'radial', 'tilt', 'screw')
+PROBES = ('memory',) + ACCURACY + ('spin', 'start', 'partial', 'torque')
 
 
-def _read(results: Path, name: str) -> pd.DataFrame | None:
-    frames = [pd.read_csv(f) for f in sorted(results.glob(f'thread*/{name}.csv'))]
-    if not frames:
-        return None
-    df = pd.concat(frames, ignore_index=True)
-    return df.drop_duplicates([k for k in KEYS if k in df], keep='last')
+def load(root: Path = tables.ROOT) -> tuple[dict, pd.DataFrame | None]:
+    """(probes by name, CPU timings) from the raw tables under root/thread/."""
+    p = {k: tables.read(f'thread/probes_cpu/{k}', root) for k in PROBES}
+    return p, tables.read('thread/speed_cpu', root)
 
 
 def _order(df: pd.DataFrame) -> list[str]:
@@ -246,7 +244,8 @@ def _worst(df: pd.DataFrame, settled: bool = True) -> float:
     if not len(df) or 'error_um' not in df:
         return np.nan
     cols = ['error_um'] if settled else ['error_max_um', 'error_min_um']
-    return float(np.nanmax(np.abs(df[cols].to_numpy())))
+    vals = np.abs(df[cols].to_numpy(dtype=float))
+    return float(np.nanmax(vals)) if not np.isnan(vals).all() else np.nan
 
 
 def summarize_start(p, c: float) -> pd.DataFrame:
@@ -388,7 +387,7 @@ def fig_partial(p, out: Path):
 # with the example configs' condim.
 TORQUE_CASES = {(0.1, 3, 'pyramidal', 1.0): '0.1 N, condim 3',
                 (0.1, 3, 'elliptic', 1.0): '0.1 N, condim 3, elliptic',
-                (0.1, 4, 'pyramidal', 1.0): '0.1 N, condim 4 (mkscrew default)',
+                (0.1, 4, 'pyramidal', 1.0): '0.1 N, condim 4',
                 (1.0, 3, 'pyramidal', 1.0): '1 N, condim 3',
                 (1.0, 3, 'elliptic', 1.0): '1 N, condim 3, elliptic',
                 (1.0, 3, 'elliptic', 0.25): '1 N, condim 3, elliptic, 0.25 ms step'}
@@ -488,18 +487,39 @@ TRACE_SETTINGS = [('ours', {'segments': 24}, False), ('ours', {'segments': 48}, 
                   ('sdf', {'depth': 8}, True)]
 
 
-def fig_start(out: Path, clearances=(100, 20)):
-    """T6 traces, re-simulated: back-spin at T4's torque and at 2x, screwing
-    on at T4's torque."""
+def _start_trace(c_um: float, direction: str, k: float, method: str, params: dict,
+                 mccd: bool):
+    """One T6 run with its trace: (label, result row, trace)."""
     from .geometry import ThreadTask
-    from .probes import START_TORQUE_RATIO, probe_start
+    from .probes import probe_start
     from .representations import build_thread
     task = ThreadTask()
+    rep = build_thread(task, method, params, c_um * 1e-6)
+    r, tr = probe_start(task, rep, direction, multiccd=mccd, torque_ratio=k, trace=True)
+    return rep.label, r, tr
+
+
+def fig_start(out: Path, clearances=(100, 20), workers: int | None = None):
+    """T6 traces, re-simulated (in parallel): back-spin at T4's torque and at
+    2x, screwing on at T4's torque."""
+    from concurrent.futures import ProcessPoolExecutor
+    from .probes import START_TORQUE_RATIO
+    from .representations import build_thread
+    from .geometry import ThreadTask
     cols = (('back', START_TORQUE_RATIO), ('back', 2.0), ('on', START_TORQUE_RATIO))
+    jobs = [(c_um, direction, k, method, params, mccd) for c_um in clearances
+            for direction, k in cols for method, params, mccd in TRACE_SETTINGS]
+    for c_um in clearances:  # build (or load) every representation once, up front
+        for method, params, _ in TRACE_SETTINGS:
+            build_thread(ThreadTask(), method, params, c_um * 1e-6)
+    if any(m == 'sdf_analytic' for m, _, _ in TRACE_SETTINGS):
+        from . import plugin
+        plugin.library()
+    with ProcessPoolExecutor(workers) as pool:
+        runs = iter(list(pool.map(_start_trace, *zip(*jobs))))   # in job order
     fig, axes = plt.subplots(len(clearances), 3, figsize=(13, 3.6 * len(clearances)),
                              squeeze=False)
     for row, c_um in zip(axes, clearances):
-        c = c_um * 1e-6
         for ax, (direction, k) in zip(row, cols):
             exact = None
             # Scale: the click (drop 4c/sqrt3) for back-spin, or a few times the
@@ -507,15 +527,13 @@ def fig_start(out: Path, clearances=(100, 20)):
             span = 4 * c_um / 3 ** .5
             lo, hi = (-1.8 * span, 0.6 * span) if direction == 'back' else (-1.5 * span, 1.5 * span)
             for method, params, mccd in TRACE_SETTINGS:
-                rep = build_thread(task, method, params, c)
-                r, tr = probe_start(task, rep, direction, multiccd=mccd, torque_ratio=k,
-                                    trace=True)
+                rep_label, r, tr = next(runs)
                 exact = tr
                 if direction == 'back':
                     y = tr['z_um']
                 else:   # screwing on: the height error, as the path runs down a turn
                     y = np.interp(tr['deg'], tr['deg_exact'], tr['z_exact_um']) - tr['z_um']
-                label = f'{NAMES[method]}, {tag(rep.label, mccd)}: {r["outcome"]}'
+                label = f'{NAMES[method]}, {tag(rep_label, mccd)}: {r["outcome"]}'
                 if np.nanpercentile(np.abs(y), 50) > max(abs(lo), hi):
                     label += f' (off scale: {np.nanmedian(np.abs(y)) / 1e3:.1f} mm)'
                     y = np.full_like(y, np.nan)
@@ -547,16 +565,16 @@ def fig_start(out: Path, clearances=(100, 20)):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--results', type=Path, default=HERE / 'results')
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--results', type=Path, default=tables.ROOT,
+                    help='raw results root (default: benchmark/results)')
     ap.add_argument('--out', type=Path, default=HERE / 'report')
     ap.add_argument('--traces', action='store_true',
                     help='re-simulate a few T6 runs for thread_start.png (a minute or two)')
     args = ap.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
-    p = {k: _read(args.results, k)
-         for k in ('memory',) + ACCURACY + ('spin', 'start', 'partial', 'torque')}
-    speed = _read(args.results, 'cpu_single')
+    p, speed = load(args.results)
     if p['axial'] is None:
         raise SystemExit('no thread results')
     md = ['# Bolt/nut benchmark: summary\n']

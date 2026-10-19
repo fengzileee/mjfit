@@ -1,7 +1,10 @@
-"""Speed benchmark: CPU MuJoCo (1 env, 1 thread) and MuJoCo Warp (256 worlds).
+"""Speed benchmark: CPU MuJoCo (1 env, 1 thread) and MuJoCo Warp (batched worlds).
 
-    python -m benchmark.run_speed                       # every rep, both backends
-    python -m benchmark.run_speed --parts warp --scenarios wall
+    python -m benchmark.run_speed --parts cpu_single     # CPU, every rep and scenario
+    python -m benchmark.run_speed --parts warp --scenarios wall --nworlds 256 512
+
+Rows go to results/peg/speed_cpu and results/peg/speed_gpu (one row per
+batch size), merged into the stored tables as each configuration finishes.
 
 Scenarios are passive, contact-rich states with gravity and friction on and a
 free peg (clearance +100 um unless noted). Every representation simulates the
@@ -28,10 +31,10 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
-import pandas as pd
 import yaml
 from mujoco import rollout
 
+from . import tables
 from .geometry import Task
 from .probes import FULL, XFRC
 from .representations import build_plate
@@ -158,9 +161,11 @@ def _warp_job(task: Task, method: str, params: dict, multiccd: bool, name: str,
               nworlds: list[int]) -> list[dict]:
     """Warp timing for one configuration, in its own process: captured CUDA
     graphs and Warp's memory pool keep device memory after a batch is freed."""
+    import warp as wp
     rep = build_plate(task, method, params)
     sc, qpos0, wrench_fn = scenario(task, rep, name, multiccd)
-    return warp_scaling(sc, qpos0, wrench_fn, nworlds)
+    gpu = wp.get_device('cuda:0').name
+    return [{'gpu': gpu, **r} for r in warp_scaling(sc, qpos0, wrench_fn, nworlds)]
 
 
 def _fresh_process():
@@ -174,7 +179,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--config', type=Path, default=HERE / 'configs' / 'probes.yaml')
-    ap.add_argument('--out', type=Path, default=HERE / 'results' / 'speed')
+    ap.add_argument('--results', type=Path, default=tables.ROOT,
+                    help='raw results root (default: benchmark/results)')
     ap.add_argument('--parts', nargs='*', default=['cpu_single', 'warp'],
                     choices=['cpu_single', 'warp'])
     ap.add_argument('--shapes', nargs='*')
@@ -184,9 +190,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     cfg = yaml.safe_load(args.config.read_text())
-    args.out.mkdir(parents=True, exist_ok=True)
-    machine = {'host': platform.node(), 'cpu': _cpu_name()}
-    tables = {p: [] for p in args.parts}
+    machine = {'cpu': _cpu_name()}
+    names = {'cpu_single': 'peg/speed_cpu', 'warp': 'peg/speed_gpu'}
     for shape in args.shapes or cfg['shapes']:
         task = Task(shape, **cfg['task'])
         for method, params in rep_configs(cfg, shape, args.methods):
@@ -197,19 +202,19 @@ def main(argv=None):
                     base = {'shape': shape, 'method': method, 'label': rep.label,
                             'multiccd': multiccd, 'scenario': name,
                             'n_plate_geoms': sc.n_plate_geoms, **machine}
-                    if 'cpu_single' in tables:
+                    rows = {}
+                    if 'cpu_single' in args.parts:
                         w = wrench_fn(1, np.random.default_rng(0))[0]
-                        tables['cpu_single'].append({**base, **cpu_single(sc, qpos0, w)})
-                    if 'warp' in tables:
+                        rows['cpu_single'] = [{**base, **cpu_single(sc, qpos0, w)}]
+                    if 'warp' in args.parts:
                         with _fresh_process() as pool:
-                            rows = pool.submit(_warp_job, task, method, params, multiccd,
-                                               name, args.nworlds).result()
-                        tables['warp'] += [{**base, **r} for r in rows]
+                            res = pool.submit(_warp_job, task, method, params, multiccd,
+                                              name, args.nworlds).result()
+                        rows['warp'] = [{**base, **r} for r in res]
                     print(f'{shape} {rep.label} multiccd={multiccd} {name}', flush=True)
-                    for part, rows in tables.items():  # checkpoint as we go
-                        if rows:
-                            pd.DataFrame(rows).to_csv(args.out / f'{part}.csv', index=False)
-    print(f'wrote {args.out}')
+                    for part, r in rows.items():  # checkpoint as we go
+                        tables.write(names[part], r, args.results)
+    print(f'wrote {", ".join(str(tables.path(names[p], args.results)) for p in args.parts)}')
 
 
 def _cpu_name() -> str:

@@ -1,6 +1,6 @@
 """Thread forms for the physics videos: M10-sized parts (D 10 mm, P 1.5 mm)
-in several of mkscrew's thread forms, and the FurnitureBench square-table leg
-in its tabletop hole (configs/screws/furniture_bench_leg.yaml).
+in several of mjfit's thread forms, and the FurnitureBench square-table leg
+in its tabletop hole (mjfit's bundled config threads/furniture_bench_leg.yaml).
 
 The FurnitureBench thread is a loose round wire (pitch 9.375 mm, about ±1.6 mm
 of axial play as modelled), so it runs at zero extra clearance. Its rod is

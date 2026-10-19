@@ -1,10 +1,10 @@
-"""Wacky screws: how far mkscrew's thread forms, starts, handedness and custom
+"""Wacky screws: how far mjfit's thread forms, starts, handedness and custom
 teeth stretch. Each design is a bolt/nut pair with its own nut-runner speed
 (rev/s), chosen so the nut stays on the rod over the video's 4.3 s.
 
 DESIGNS are convex teeth; UNDERCUT are teeth that hook under each other (a
 dovetail, and non-convex L-hooks, T-slots and barbed arrowheads), which
-mkscrew cuts into convex pieces.
+mjfit cuts into convex pieces.
 
     MUJOCO_GL=egl python -m benchmark.thread.render --behaviors wacky --workers 1
     MUJOCO_GL=egl python -m benchmark.thread.render --behaviors undercut --workers 1

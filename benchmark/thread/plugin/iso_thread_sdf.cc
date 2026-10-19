@@ -13,7 +13,8 @@
 //   clearance c
 //   length    bolt thread length, or nut height
 //   outer     nut outer radius (ignored for the bolt)
-// Any other thread form (mkscrew's thread_form) gives its tooth instead:
+// Any other thread (another mjfit thread form, several starts, left-handed,
+// or chamfered) gives its tooth instead:
 //   nvert     number of tooth vertices (0 = the ISO tooth above)
 //   base      radius the tooth's dr is measured from (bolt core / nut root)
 //   shell     nut bore radius (ignored for the bolt)
@@ -25,7 +26,8 @@
 //   v<i>r, v<i>u  vertex i: (dr, u), u in the bolt's phase for both parts,
 //             at most kMaxVert of them (geometry.py's bolt_tooth / nut_tooth)
 //
-// Build (see build.py): g++ -std=c++17 -O2 -fPIC -shared -I<mujoco>/include
+// Built on first use by __init__.py (Linux, g++ with C++17), against the
+// installed mujoco wheel: g++ -std=c++17 -O2 -fPIC -shared -I<mujoco>/include
 //   iso_thread_sdf.cc <mujoco>/libmujoco.so.X -o libiso_thread_sdf.so
 
 #include <algorithm>

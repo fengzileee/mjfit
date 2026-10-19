@@ -473,8 +473,8 @@ def probe_partial(task: ThreadTask, rep: ThreadRep, duration: float = 1.0,
 # ----- T8: turning torque against friction --------------------------------------------------
 
 TORQUE_MU = (0.1, 0.3, 1.0)
-# (axial load N, condim, friction cone, timestep s). condim 4 carries mkscrew's
-# default torsional coefficient, TORQUE_TORSION.
+# (axial load N, condim, friction cone, timestep s). condim 4 adds the torsional
+# coefficient TORQUE_TORSION (mjfit's default torsional friction).
 TORQUE_CASES = ((0.1, 3, 'pyramidal', 1e-3), (0.1, 3, 'elliptic', 1e-3),
                 (0.1, 4, 'pyramidal', 1e-3), (1.0, 3, 'pyramidal', 1e-3),
                 (1.0, 3, 'elliptic', 1e-3), (1.0, 3, 'elliptic', 2.5e-4))

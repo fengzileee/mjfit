@@ -10,7 +10,7 @@ task:                    # meters
 shapes: [circle, square]
 
 methods:
-  ours:                  # mkpeg prisms; chord error applies to curved outlines only
+  ours:                  # mjfit prisms; chord error applies to curved outlines only
     circle:              # circumscribed n-gon, n = 7 ... 281 sides at R = 8 mm
       - {chord_error_um: 1000}
       - {chord_error_um: 500}

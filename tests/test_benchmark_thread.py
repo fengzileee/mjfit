@@ -5,7 +5,9 @@ import math
 import numpy as np
 import pytest
 
+import mjfit
 from benchmark.thread import geometry as G
+from mjfit import _polygon, _thread
 
 TASK = G.ThreadTask()
 
@@ -107,14 +109,15 @@ def test_analytic_sdf_config_carries_the_tooth():
                                   'dovetail', 'hook', 't_slot', 'barb'])
 def test_wacky_screws_stay_inside_and_start_interlocked(name):
     """Multi-start, left-hand, custom and undercut (non-convex) teeth end to
-    end: mkscrew's wedges inside the exact parts, the exact surfaces on their
+    end: mjfit's wedges inside the exact parts, the exact surfaces on their
     boundary, and the scene's nut on the thread (no contact centred, contact
     when shifted)."""
     import mujoco
+
     from benchmark.thread.representations import build_thread
     from benchmark.thread.scene import build_scene, pair_contacts
     from benchmark.thread.wacky import DESIGNS, UNDERCUT
-    from tests.test_mkscrew import _hull_surface
+    from tests.test_thread import _hull_surface
     d = {**DESIGNS, **UNDERCUT}[name]
     task, c = d.task, d.clearance_um * 1e-6
     rep = build_thread(task, 'ours', {'segments': 24, 'relief_um': 5}, c, use_cache=False)
@@ -140,14 +143,13 @@ def test_wacky_screws_stay_inside_and_start_interlocked(name):
 @pytest.mark.parametrize('name', ['hook', 't_slot', 'barb'])
 def test_undercut_teeth_are_cut_into_convex_pieces_that_tile_them(name):
     from benchmark.thread.wacky import UNDERCUT
-    import mkscrew
     task = UNDERCUT[name].task
     for tooth in G._profile(task).teeth(1e-4):
-        assert not mkscrew._is_convex_poly(tooth)
+        assert not _polygon.is_convex(tooth)
         pieces = G._pieces(tooth)
-        assert len(pieces) > 1 and all(mkscrew._is_convex_poly(q) for q in pieces)
-        area = sum(abs(mkscrew._signed_area(q)) for q in pieces)
-        assert area == pytest.approx(abs(mkscrew._signed_area(tooth)), rel=1e-12)
+        assert len(pieces) > 1 and all(_polygon.is_convex(q) for q in pieces)
+        area = sum(abs(_polygon.signed_area(q)) for q in pieces)
+        assert area == pytest.approx(abs(_polygon.signed_area(tooth)), rel=1e-12)
 
 
 @pytest.mark.parametrize('name', ['sawtooth', 'dovetail', 'hook', 't_slot', 'barb'])
@@ -155,8 +157,8 @@ def test_wedges_cover_the_teeth(name):
     """No material goes missing: points well inside the exact teeth (in from
     every face by more than the discretization takes off) lie inside some
     wedge. Protrusion tests cannot see a dropped piece."""
-    import mkscrew
     from scipy.spatial import ConvexHull
+
     from benchmark.thread.representations import build_thread
     from benchmark.thread.wacky import DESIGNS, UNDERCUT
     d = {**DESIGNS, **UNDERCUT}[name]
@@ -167,8 +169,8 @@ def test_wedges_cover_the_teeth(name):
     for tooth, hulls, lo, hi in ((prof.teeth(c)[0], rep.bolt.hulls, 0.0, task.bolt_length),
                                  (prof.teeth(c)[1], rep.nut.hulls, 0.0, task.nut_height)):
         margin = 0.1 * task.pitch if task.pitch < 3e-3 else 1.5e-4
-        inner = (mkscrew._offset_polygon(tooth, margin) if mkscrew._is_convex_poly(tooth)
-                 else mkscrew._offset_mitre(tooth, margin))
+        inner = (_thread._offset_polygon(tooth, margin) if _polygon.is_convex(tooth)
+                 else _thread._offset_mitre(tooth, margin))
         assert inner is not None
         box_lo, box_hi = inner.min(0), inner.max(0)
         q = box_lo + rng.random((20000, 2)) * (box_hi - box_lo)
@@ -198,6 +200,7 @@ def test_chamfer_removes_the_dovetail_blade():
     """Cut off flat, a dovetail's crest runs on past its root and leaves a
     thin blade off the core at each end; a 45° chamfer removes it."""
     import dataclasses
+
     from benchmark.thread.representations import build_thread
     from benchmark.thread.wacky import UNDERCUT
     task, c = UNDERCUT['dovetail'].task, 1e-4
@@ -210,13 +213,13 @@ def test_chamfer_removes_the_dovetail_blade():
 @pytest.mark.parametrize('nut_driven', [False, True])
 def test_chamfered_iso_stays_inside_and_interlocked(nut_driven):
     import mujoco
-    import mkscrew
-    from tests.test_mkscrew import _hull_surface, _meshes
+
+    from tests.test_thread import _hull_surface, _meshes
     task, c = G.ThreadTask(chamfer=0.001), 1e-4
-    xml = mkscrew.generate_screw_xml(clearance=c, thread_chamfer=task.chamfer,
-                                     thread_length=task.bolt_length, nut_height=task.nut_height,
-                                     nut_outer_diameter=2 * task.nut_outer_radius,
-                                     bolt_head_height=0, include_floor=False, nut_driven=nut_driven)
+    xml = mjfit.thread(clearance=c, chamfer=task.chamfer,
+                       thread_length=task.bolt_length, nut_height=task.nut_height,
+                       nut_size=2 * task.nut_outer_radius, nut_shape='cylinder',
+                       bolt_head_height=0, floor=False, driven='nut' if nut_driven else 'bolt')
     if not nut_driven:
         rng = np.random.default_rng(0)
         for part, sdf in (('bolt', G.bolt_sdf), ('nut', G.nut_sdf)):
@@ -345,7 +348,7 @@ def test_screw_torque_formula():
 
 def test_torque_probe_tracks_the_formula():
     """At T4's light load with condim 3, the engaged nut turns at a little
-    over the formula; mkscrew's default condim 4 adds torsional friction."""
+    over the formula; condim 4 adds torsional friction."""
     from benchmark.thread import probes as T
     from benchmark.thread.representations import build_thread
     rep = build_thread(TASK, 'ours', {'segments': 24}, 1e-4)

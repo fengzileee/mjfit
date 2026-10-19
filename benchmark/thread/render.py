@@ -9,8 +9,8 @@ Pareto front at c = 100 µm), each re-simulated exactly as its probe runs it:
   spin    : T5. Free nut on the vertical bolt, frictionless, under gravity.
             Exact: it spins down with constant acceleration g/(1 + I(2pi/P)^2/m).
 
-rundown and compare: the same run, at the 1 ms step. rundown puts mkscrew
-(with seam relief) against the two SDFs, with traces; compare is plain
+rundown and compare: the same run, at the 1 ms step. rundown puts mjfit's
+wedges (with seam relief) against the two SDFs, with traces; compare is plain
 side-by-side renders of each method's pick with its real-time factor:
 
   rundown : Free nut on the vertical bolt under gravity, sliding friction 0.3
@@ -129,16 +129,16 @@ BEHAVIORS = {
                 f'{RUN_TMAX * 1e3:g} mN·m) turns it 4 turns down. Exact: it rides its lower flanks '
                 '(2c/√3 below centred) at the power-screw lowering torque.', 4.3, 0.04, 25),
     'compare': ('Run-down', '', 4.3, 0.04, 25),
-    'forms': ('Thread forms', 'Ours (mkscrew, 24 segments per turn, 5 µm seam relief) in the '
+    'forms': ('Thread forms', 'Ours (mjfit, 24 segments per turn, 5 µm seam relief) in the '
               f'run-down: free nut, gravity, sliding friction μ = {RUN_MU:g}. A nut runner turns '
               f'it 4 turns down at {RUN_SPEED:g} rev/s, with a torque limit of about 50× the '
               "form's screw-formula torque. Exact: it rides its loaded flanks at the exact seat.",
               4.3, 0.04, 25),
-    'wacky': ('Wacky screws', 'Ours (mkscrew, 24 segments per turn, 5 µm seam relief) in the '
+    'wacky': ('Wacky screws', 'Ours (mjfit, 24 segments per turn, 5 µm seam relief) in the '
               f'run-down: free nut, gravity, sliding friction μ = {RUN_MU:g}, 1 ms step. A nut '
               'runner drives each nut down its thread. Insets: the two teeth in the meridian '
               'plane, bolt grey, nut orange.', 4.3, 0.04, 25),
-    'undercut': ('Undercut teeth', 'A dovetail, and non-convex hooks that mkscrew cuts into '
+    'undercut': ('Undercut teeth', 'A dovetail, and non-convex hooks that mjfit cuts into '
                  'convex pieces (white lines in the insets; bolt grey, nut orange). Ours, 24 '
                  f'segments per turn, 5 µm seam relief; free nut, μ = {RUN_MU:g}, driven down by '
                  'a nut runner.', 4.3, 0.04, 25),
@@ -510,9 +510,7 @@ class Tile:
 
 
 def _metrics(c_um: float) -> dict:
-    res = HERE / 'results'
-    p = {k: TR._read(res, k) for k in ('memory',) + TR.ACCURACY}
-    speed = TR._read(res, 'cpu_single')
+    p, speed = TR.load()
     out = {}
     for method, params, mccd in POINTS:
         label = method + '(' + ','.join(f'{k}={v}' for k, v in params.items()) + ')'

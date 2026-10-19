@@ -7,7 +7,7 @@ always an exact MuJoCo primitive (cylinder or box), so only the plate's
 collision representation varies between methods.
 
 Ground truth comes from the analytic outlines (a true circle, not a
-tessellation), so every representation, mkpeg's included, is charged for its
+tessellation), so every representation, mjfit's included, is charged for its
 own approximation error. All lengths are meters.
 """
 from __future__ import annotations

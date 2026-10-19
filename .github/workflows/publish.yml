@@ -8,6 +8,8 @@ on:
 
 jobs:
   pypi:
+    # Only package releases (v0.1.0, ...), not data releases such as benchmark-v1.
+    if: startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -24,5 +26,6 @@ jobs:
       - name: Check the release tag matches the package version
         run: |
           version=$(python -c "import re; print(re.search(r\"__version__ = '([^']+)'\", open('src/mjfit/__init__.py').read())[1])")
-          test "${GITHUB_REF_NAME#v}" = "$version" || { echo "tag $GITHUB_REF_NAME != version $version"; exit 1; }
+          tag="${{ github.event.release.tag_name }}"
+          test "${tag#v}" = "$version" || { echo "tag $tag != version $version"; exit 1; }
       - uses: pypa/gh-action-pypi-publish@release/v1
