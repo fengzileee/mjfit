@@ -24,7 +24,7 @@ jobs:
         run: pip install -e ".[test]" "${{ matrix.mujoco }}" "${{ matrix.numpy }}"
       - name: Tests
         # The benchmark's own tests need its extra dependencies (pip install -e ".[benchmark]").
-        run: pytest -q --ignore=tests/test_benchmark_geometry.py --ignore=tests/test_benchmark_thread.py
+        run: pytest -q --ignore-glob="tests/test_benchmark_*.py"
       - name: README commands
         run: |
           cd "$(mktemp -d)"
