@@ -27,7 +27,7 @@ edge, and MuJoCo collides every piece natively.
 ## Install
 
 ```bash
-pip install mjfit
+pip install git+https://github.com/younghyopark/mjfit
 ```
 
 mjfit needs Python 3.10 or newer and MuJoCo 3.3 or newer. To work on it, clone the
