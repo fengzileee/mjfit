@@ -1,12 +1,11 @@
 [build-system]
-requires = ["hatchling>=1.24"]
+requires = ["hatchling>=1.24", "hatch-fancy-pypi-readme>=24"]
 build-backend = "hatchling.build"
 
 [project]
 name = "mjfit"
-version = "0.1.0"
 description = "Exact convex collision geometry for MuJoCo assemblies: pegs and holes, threads, and gears."
-readme = "README.md"
+dynamic = ["readme", "version"]
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Younghyo Park", email = "younghyo@mit.edu" }]
@@ -48,6 +47,29 @@ mjfit = "mjfit.cli:main"
 [project.urls]
 Homepage = "https://github.com/younghyopark/mjfit"
 Issues = "https://github.com/younghyopark/mjfit/issues"
+Paper = "https://arxiv.org/abs/2610.23849"
+
+[tool.hatch.version]
+path = "src/mjfit/__init__.py"
+
+# PyPI renders the README without the repository, so point its relative links at GitHub.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '!\[([^\]]*)\]\((?!https?://)([^)]+)\)'
+replacement = '![\1](https://raw.githubusercontent.com/younghyopark/mjfit/main/\2)'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(?<!!)\[([^\]]*)\]\((?!https?://|#)([^)]+)\)'
+replacement = '[\1](https://github.com/younghyopark/mjfit/blob/main/\2)'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\(#([^)]+)\)'
+replacement = '](https://github.com/younghyopark/mjfit#\1)'
 
 [tool.hatch.build.targets.sdist]
 include = ["src/mjfit", "tests", "README.md", "LICENSE"]
