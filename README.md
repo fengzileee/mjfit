@@ -11,10 +11,10 @@ outline, threads, and gears.
 MuJoCo collides only convex shapes, and a hole is concave. Approximate convex
 decomposition (CoACD, V-HACD) fills in the very clearance an assembly task depends on,
 and signed-distance collision is slow and misses contacts. mjfit builds each part from
-convex prisms whose union is the exact part. The plate around a hole is cut into convex
+convex pieces whose union is the exact part. The plate around a hole is cut into convex
 wedges, the peg is the hole offset inward by the clearance, and thread and gear teeth
-are swept from convex profiles. Every peg edge sits exactly one clearance from its hole
-edge, and MuJoCo collides every piece natively.
+are swept from convex profiles. Every straight peg edge sits exactly one clearance from
+its hole edge, and MuJoCo collides every piece natively.
 
 - **Exact.** Circles and arcs become polygons that circumscribe them, so a round hole is
   never smaller than drawn. The only error is a little extra play at the corners.
@@ -80,11 +80,16 @@ a shape from `mjfit.shapes`: `circle`, `rect`, `stadium`, `trapezoid`, `ngon`, `
 
 | To add | Use |
 | --- | --- |
+| A 45° bevel around the insertion tip, including hollow peg pocket mouths | `chamfer` (axial length in meters) |
 | Material standing in the hole, such as a USB tongue or connector pins; the peg becomes a hollow shell | `islands` |
 | A wider grip section above the peg | `handle_height`, and optionally a `handle` outline |
 | A convex outer plate that keeps a rim around the hole and handle | `plate`, `min_rim` |
 | A closed hole | `bottom_thickness` |
 | A fixed total mass for the peg | `peg_mass` |
+
+For example, `mjfit.peg(hole=shapes.circle(0.008), chamfer=0.001)` adds a 1 mm
+lead-in while keeping the total peg length and straight-section clearance unchanged.
+The CLI equivalent is `mjfit peg --shape circle --size 0.008 --chamfer 0.001 -o peg.xml`.
 
 **Threads** ([docs](docs/threads.md)). A bolt and its nut, swept from ISO metric,
 trapezoidal, ACME, square, buttress, round-wire, or your own tooth profiles, including
