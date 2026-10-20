@@ -21,3 +21,6 @@ benchmark/results/**/*.mp4
 
 # MuJoCo warnings
 MUJOCO_LOG.TXT
+# pixi environments
+.pixi/*
+!.pixi/config.toml
