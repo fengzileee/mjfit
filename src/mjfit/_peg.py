@@ -12,6 +12,7 @@ import numpy as np
 from . import _mjcf as mj
 from . import _polygon as pg
 from . import shapes
+from ._chamfer import verified_hulls
 
 PLATE_RGBA = '0.70 0.75 0.82 1'
 PEG_RGBA = '0.90 0.30 0.30 1'
@@ -75,6 +76,11 @@ def peg(
             than peg_length (and the pocket depth for hollow pegs), and small
             enough to leave a valid tip outline and positive wall thickness.
             The total peg length and straight-section clearance stay unchanged.
+            Keeps the unchamfered collision geom count. Raises ValueError with
+            'failed to create chamfer' if the union of the extended convex hulls
+            cannot be made to match the intended chamfered solid. Invalid
+            extensions are repaired by merging exact chamfer pieces within
+            the same geom budget. Hulls may overlap.
         handle: Convex outline of a wider grip section above the peg. It must
             contain the peg outline.
         handle_height: Height of the grip section; 0 for none. Without a
@@ -91,7 +97,7 @@ def peg(
             hole and handle.
         bottom_thickness: Closes the hole from below with a bottom this thick;
             0 leaves a through hole.
-        peg_mass: Total mass of the peg and handle in kg, spread by volume.
+        peg_mass: Total mass of the peg and handle in kg, spread by geom volume.
             Overrides ``peg_density``.
         peg_density: Density of the peg, kg/m^3.
         plate_density: Density of the plate, kg/m^3 (matters with ``free_plate``).
@@ -229,7 +235,7 @@ def peg(
     # Each entry: (geom name, polygon, z0, z1, rgba), z in the peg frame whose
     # origin is the middle of the insertion section.
     parts: list[tuple[str, np.ndarray, float, float, str]] = []
-    # Chamfer meshes carry outward-facing triangles for export and exact mass.
+    # Chamfer hulls carry outward-facing triangles for export and geom volumes.
     polyhedra: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     chamfer_surface = None
     handle_poly = None
@@ -243,33 +249,31 @@ def peg(
                    "chamfer must be less than the pocket depth "
                    "(plate_thickness + clearance).")
             for k, p in enumerate(pg.triangulate(insert, pockets)):
-                parts.append((f'peg_ring_{k}', p, shoulder_z, tip_z + depth, PEG_RGBA))
+                parts.append((f'peg_ring_{k}', p, tip_z, tip_z + depth, PEG_RGBA))
             for k, p in enumerate(pg.convex_pieces(insert)):
                 parts.append((f'peg_back_{k}', p, -length / 2 + depth, length / 2, PEG_RGBA))
-        elif bevel == 0 or not pg.is_convex(insert):
+        else:
             for k, p in enumerate(pg.convex_pieces(insert)):
-                parts.append((f'peg_{k}', p, shoulder_z, length / 2, PEG_RGBA))
+                parts.append((f'peg_{k}', p, tip_z, length / 2, PEG_RGBA))
         if bevel > 0:
-            convex = not pockets and pg.is_convex(insert)
-            if convex or mesh_dir is not None:
-                chamfer_surface = _chamfer_surface(
-                    insert, pockets, tip, tip_pockets, tip_z, length / 2, bevel, thick + c)
-            if convex:
-                polyhedra['peg_0'] = chamfer_surface
-            else:
-                # The tip core plus one wedge per boundary edge tiles each
-                # intermediate offset exactly, including at concave corners.
-                core = (pg.triangulate(tip, tip_pockets) if pockets
-                        else pg.convex_pieces(tip))
-                for k, p in enumerate(core):
-                    parts.append((f'peg_tip_{k}', p, tip_z, shoulder_z, PEG_RGBA))
-                rings = [(insert, tip)]
-                rings += [(p[::-1], t[::-1]) for p, t in zip(pockets, tip_pockets)]
-                for full, small in rings:
-                    for i in range(len(full)):
-                        j = (i + 1) % len(full)
-                        polyhedra[f'peg_chamfer_{len(polyhedra)}'] = _chamfer_wedge(
-                            small[[i, j]], full[[i, j]], tip_z, shoulder_z)
+            chamfer_surface = _chamfer_surface(
+                insert, pockets, tip, tip_pockets, tip_z, length / 2, bevel, thick + c)
+            moved = {tuple(v): t for full, small in zip([insert, *pockets], [tip, *tip_pockets])
+                     for v, t in zip(full, small)}
+            points = []
+            for _, p, z0, z1, _ in parts:
+                rings = [(p, z0), (p, z1)]
+                if z0 == tip_z:
+                    # Boundary vertices follow their mitred offsets. Interior
+                    # fan vertices stay fixed. Preserve the original shaft.
+                    small = np.array([moved.get(tuple(v), v) for v in p])
+                    rings = [(small, tip_z), (p, shoulder_z), (p, z1)]
+                points.append(np.vstack([np.column_stack((p, np.full(len(p), z)))
+                                         for p, z in rings]))
+            hulls = verified_hulls(points, chamfer_surface, repair=lambda: _chamfer_seeds(
+                parts, insert, pockets, tip, tip_pockets, tip_z, shoulder_z))
+            polyhedra.update((part[0], hull) for part, hull in zip(parts, hulls))
+            parts.clear()
         if handle_h > 0:
             if handle is not None:
                 handle_poly = pg.convex_outline(resolve(handle, 'handle') - shift, 'Handle outline')
@@ -347,20 +351,30 @@ def peg(
     return model.to_xml()
 
 
-def _chamfer_wedge(tip, full, z0, z1):
-    """One convex edge wedge. Boundaries run with material on their left."""
-    vertices = np.vstack([
-        np.column_stack((tip, np.full(2, z0))),
-        np.column_stack((tip, np.full(2, z1))),
-        np.column_stack((full, np.full(2, z1))),
-    ])
-    faces = np.array([
-        [2, 4, 5], [2, 5, 3],       # top
-        [0, 2, 3], [0, 3, 1],       # core wall
-        [0, 1, 5], [0, 5, 4],       # sloping outer face
-        [0, 4, 2], [1, 3, 5],       # ends
-    ])
-    return vertices, faces
+def _chamfer_seeds(parts, outer, holes, tip, mouths, z0, shoulder):
+    """Exact convex cover used only to repair invalid same-count extensions.
+
+    These temporary pieces are merged before exporting any collision geoms.
+    Back pieces stay unchanged, last in the returned list as in ``parts``.
+    """
+    def prism(poly, lo, hi):
+        return np.vstack([np.column_stack((poly, np.full(len(poly), z))) for z in (lo, hi)])
+
+    seeds, fixed = [], []
+    for _, poly, lo, hi, _ in parts:
+        if lo == z0:
+            seeds.append(prism(poly, shoulder, hi))
+        else:
+            fixed.append(prism(poly, lo, hi))
+    core = pg.triangulate(tip, mouths) if holes else pg.convex_pieces(tip)
+    seeds.extend(prism(poly, z0, shoulder) for poly in core)
+    rings = [(outer, tip)] + [(h[::-1], t[::-1]) for h, t in zip(holes, mouths)]
+    for full, small in rings:
+        for i in range(len(full)):
+            edge = [i, (i + 1) % len(full)]
+            seeds.append(np.vstack([prism(small[edge], z0, shoulder),
+                                    np.column_stack((full[edge], np.full(2, shoulder)))]))
+    return seeds, fixed
 
 
 def _chamfer_surface(outer, holes, tip, mouths, z0, z1, height, depth):

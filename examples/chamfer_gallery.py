@@ -1,12 +1,13 @@
 """Render flat/chamfered comparisons for peg presets and a three-pin plug.
 
     pixi run chamfer-gallery
-    pixi run python -m mujoco.viewer --mjcf=build/chamfer_gallery/usb_c.xml
+    pixi run python -m mujoco.viewer --mjcf=build/chamfer_gallery/circle.xml
 
 The PNGs show the assembly and a view of the insertion face from below.
 Each XML is a stationary, interactive pair: flat on the left, bevel on the right.
 Preset dimensions are preserved. The Type-G-style example has three separate
 socket holes and pins joined by one handle, with a longer earth pin.
+Failed chamfer verification is recorded in the manifest instead of rendering a pair.
 """
 
 from __future__ import annotations
@@ -282,14 +283,21 @@ def main():
     cards, metadata = [], []
     for name in args.configs:
         chamfer = CHAMFERS[name]
-        if name == 'type_g':
-            spawn = 0.009
-            parts = [type_g(c, spawn) for c in (0, chamfer)]
-        else:
-            config = mjfit.load(name)
-            spawn = max(0.005, config.get('peg_length', 0.03) * 0.4)
-            parts = [mjfit.build(config, chamfer=c, spawn_height=spawn, standalone=False)
-                     for c in (0, chamfer)]
+        try:
+            if name == 'type_g':
+                spawn = 0.009
+                parts = [type_g(c, spawn) for c in (0, chamfer)]
+            else:
+                config = mjfit.load(name)
+                spawn = max(0.005, config.get('peg_length', 0.03) * 0.4)
+                parts = [mjfit.build(config, chamfer=c, spawn_height=spawn, standalone=False)
+                         for c in (0, chamfer)]
+        except ValueError as exc:
+            if not str(exc).startswith('failed to create chamfer:'):
+                raise
+            metadata.append(dict(config=name, chamfer_m=chamfer, error=str(exc)))
+            print(f'{name}: {exc}', flush=True)
+            continue
         models = [mujoco.MjModel.from_xml_string(studio(p)) for p in parts]
         _, assembly_bounds, tip_bounds = frames(models[0])
         spacing = float(np.ptp(assembly_bounds[:, 0])) * 1.4

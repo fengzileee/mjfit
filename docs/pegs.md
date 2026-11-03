@@ -87,13 +87,29 @@ increases clearance near the tip; the straight section keeps the requested
 `clearance`. The plate, hole rim, and handle retain their original geometry.
 `scale` scales the chamfer along with the other lengths. Both inline collision
 meshes and exported OBJ visual meshes include the bevel, and `peg_mass` is
-distributed using the bevelled pieces' volumes.
+distributed using the collision pieces' volumes.
 
 The default is `chamfer=0`, which preserves the flat-ended geometry. Positive
 chamfers require `include_peg=True`, must be shorter than `peg_length`, and must
 leave a simple tip outline with the same topology. On hollow pegs they must also
 be shorter than the pocket depth (`plate_thickness + clearance`), with positive
 walls between all pocket mouths and the outer tip. Invalid sizes raise an error.
+
+Chamfers keep the same collision geom names and count as the flat-ended peg.
+Each existing piece is extended to its offset tip vertices and replaced by its
+convex hull. Before exporting, solid Boolean operations verify that the hulls
+cover the intended chamfered solid without gaps or extra material. Interior
+overlaps are allowed. If the extension fails, an exact tip-core-and-edge-wedge
+cover is built internally and merged back to the original geom count. A merge
+is accepted only when its convex hull stays inside the intended solid. The
+complete union is verified again before export. If repair cannot fit the geom
+budget or verification still fails, construction raises
+`ValueError("failed to create chamfer: ...")`.
+
+Verification uses `manifold3d` in normalized coordinates. Volume discrepancies
+are tolerated up to the larger of `1e-10` times the reference volume and 64
+float64 machine epsilons in those coordinates. This is a numerical geometric
+check, not a sampling test or an exact-arithmetic proof.
 
 To verify a local checkout with the Pixi environment:
 
@@ -115,14 +131,13 @@ pixi run python -m mujoco.viewer --mjcf=build/chamfer_comparison.xml
 The automated tests also check that the chamfer clears the rim during shallow
 entry with a lateral offset, then produces contact on deeper entry.
 
-`pixi run chamfer-gallery` generates assembly and underside comparisons for all nine
+`pixi run chamfer-gallery` attempts assembly and underside comparisons for the
 bundled peg presets in `build/chamfer_gallery/`. It writes `overview.png`, an image
-and interactive XML scene per preset, and `manifest.json` with the chamfer sizes.
-The sizes fit the original outlines and pocket walls; HDMI uses a 0.01 mm chamfer
-and has an additional `hdmi_detail.png` close-up. To inspect one pair:
+and interactive XML scene per successful preset, and `manifest.json` with the
+chamfer sizes and any verification failures. To inspect one successful pair:
 
 ```bash
-pixi run python -m mujoco.viewer --mjcf=build/chamfer_gallery/usb_c.xml
+pixi run python -m mujoco.viewer --mjcf=build/chamfer_gallery/circle.xml
 ```
 
 ## Handle, plate, and bottom
@@ -149,8 +164,10 @@ pixi run python -m mujoco.viewer --mjcf=build/chamfer_gallery/usb_c.xml
 - **Peg.** A convex peg is one prism. A star-shaped one is fanned from its center, and
   anything else is ear-clipped into triangles.
 - **Chamfered peg.** A solid convex peg, including its bevel, is one convex mesh.
-  Other pegs use a decomposed tip core and one convex wedge per boundary edge
-  below the straight section, preserving concavities and pocket openings.
+  Other pegs first extend their original pieces to the tip and take convex hulls.
+  Invalid extensions are repaired by merging an exact chamfer cover to the same
+  geom count. The result must pass full-solid coverage and containment checks or
+  construction raises an error. Overlap between convex pieces is allowed.
 - **Hollow peg.** The ring is triangulated around its pockets, and the solid back is cut
   like a solid peg.
 - **Islands** are single prisms if convex, else ear-clipped.
@@ -170,7 +187,7 @@ outline's centroid is at the origin; `center=False` keeps your coordinates.
 
 Geoms and meshes share names: `plate_<k>`, `island_<k>`, and `bottom` on the plate;
 `peg_<k>`, `peg_ring_<k>`, `peg_back_<k>`, and `handle_<k>` on the peg.
-Chamfered concave or hollow pegs also have `peg_tip_<k>` and `peg_chamfer_<k>` pieces.
+Chamfers preserve these names and do not add separate tip or bevel geoms.
 
 ## Contact
 

@@ -91,6 +91,10 @@ a shape from `mjfit.shapes`: `circle`, `rect`, `stadium`, `trapezoid`, `ngon`, `
 For example, `mjfit.peg(hole=shapes.circle(0.008), chamfer=0.001)` adds a 1 mm
 lead-in while keeping the total peg length and straight-section clearance unchanged.
 The CLI equivalent is `mjfit peg --shape circle --size 0.008 --chamfer 0.001 -o peg.xml`.
+Chamfers preserve the original collision geom count. Every piece is convex, and
+their union is verified against the intended solid. Invalid extensions are
+repartitioned within the same geom budget; if that fails, construction raises
+`ValueError("failed to create chamfer: ...")`. Pieces may overlap internally.
 
 **Threads** ([docs](docs/threads.md)). A bolt and its nut, swept from ISO metric,
 trapezoidal, ACME, square, buttress, round-wire, or your own tooth profiles, including

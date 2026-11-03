@@ -15,6 +15,7 @@ dependencies = [
     "numpy>=1.24",
     "mujoco>=3.3",
     "mapbox_earcut>=1.0",
+    "manifold3d>=3.5",
     "pyyaml>=6.0",
 ]
 keywords = ["mujoco", "robotics", "simulation", "collision", "peg-in-hole", "assembly"]
@@ -31,7 +32,6 @@ benchmark = [
     "coacd>=1.0",
     "vhacdx>=0.1",
     "trimesh>=4.0",
-    "manifold3d>=2.5",
     "shapely>=2.0",
     "scipy>=1.10",
     "pandas>=2.0",

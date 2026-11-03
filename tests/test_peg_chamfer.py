@@ -2,6 +2,7 @@
 
 import xml.etree.ElementTree as ET
 
+import manifold3d
 import mujoco
 import numpy as np
 import pytest
@@ -41,13 +42,21 @@ def peg_meshes(xml):
     return {name: v for name, v in inline_meshes(xml).items() if name.startswith('peg_')}
 
 
+def union_volume(meshes):
+    hulls = [manifold3d.Manifold.hull_points(v) for v in meshes.values()]
+    return manifold3d.Manifold.batch_boolean(hulls, manifold3d.OpType.Add).volume()
+
+
 @pytest.mark.parametrize('outline,islands', CASES, ids=CASE_NAMES)
 def test_chamfer_sections_tile_the_exact_offset(outline, islands):
-    """Probe the actual 3D hulls: no filled concavities, gaps, or overlaps."""
+    """Probe the actual 3D hull union: no filled concavities or gaps."""
     clearance, bevel, length = 1e-4, 8e-4, 0.03
     xml = mjfit.peg(hole=outline, islands=islands, clearance=clearance,
                     chamfer=bevel, peg_length=length, center=False)
     meshes = peg_meshes(xml)
+    flat = mjfit.peg(hole=outline, islands=islands, clearance=clearance,
+                     peg_length=length, center=False)
+    assert meshes.keys() == peg_meshes(flat).keys()
     hulls = [ConvexHull(v) for v in meshes.values()]
     model = mujoco.MjModel.from_xml_string(xml)
     for (name, _), hull in zip(meshes.items(), hulls):
@@ -65,7 +74,7 @@ def test_chamfer_sections_tile_the_exact_offset(outline, islands):
         for hull in hulls:
             planes = hull.equations
             inside_count += np.all(points @ planes[:, :3].T + planes[:, 3] < -1e-12, axis=1)
-        np.testing.assert_array_equal(inside_count, expected.astype(int))
+        np.testing.assert_array_equal(inside_count > 0, expected)
 
     # Integrating the quadratic area of parallel offsets is exact by Simpson's rule.
     def area(inset):
@@ -78,7 +87,7 @@ def test_chamfer_sections_tile_the_exact_offset(outline, islands):
     expected_volume += (length - depth) * pg.signed_area(pg.offset_inward(outline, clearance))
     if not islands and pg.is_convex(outline):
         assert len(hulls) == 1
-    assert sum(h.volume for h in hulls) == pytest.approx(expected_volume, rel=1e-10)
+    assert union_volume(meshes) == pytest.approx(expected_volume, rel=1e-10)
 
 
 @pytest.mark.parametrize('source', ['hole', 'peg'])
@@ -110,6 +119,9 @@ def test_chamfer_export_mass_and_scaling(outline, islands, tmp_path):
                   chamfer=8e-4, peg_mass=0.25, handle_height=0.01, bottom_thickness=0.002)
     xml = mjfit.peg(**kwargs)
     model = mujoco.MjModel.from_xml_string(xml)
+    flat = mujoco.MjModel.from_xml_string(mjfit.peg(**{**kwargs, 'chamfer': 0}))
+    assert model.ngeom == flat.ngeom
+    assert model.nbody == flat.nbody
     assert model.body('peg').mass[0] == pytest.approx(0.25, abs=1e-12)
     np.testing.assert_allclose(model.body('peg').pos, [0, 0, 0.002 + 0.01 + 0.005 + 0.015])
     meshes = inline_meshes(xml)
@@ -128,14 +140,13 @@ def test_chamfer_export_mass_and_scaling(outline, islands, tmp_path):
     np.testing.assert_allclose(exported.body('peg').ipos, model.body('peg').ipos, atol=1e-8)
     np.testing.assert_allclose(exported.body('peg').inertia, model.body('peg').inertia, rtol=1e-6)
 
-    # The exported visual surface encloses exactly the collision pieces' volume.
+    # The exported visual surface encloses exactly the collision pieces' union.
     lines = (tmp_path / 'peg_meshes' / 'peg_visual.obj').read_text().splitlines()
     verts = np.array([line.split()[1:] for line in lines if line.startswith('v ')], float)
     faces = np.array([line.split()[1:] for line in lines if line.startswith('f ')], int) - 1
     a, b, c = verts[faces].transpose(1, 0, 2)
     visual_volume = np.einsum('ij,ij->i', a, np.cross(b, c)).sum() / 6
-    assert visual_volume == pytest.approx(
-        sum(ConvexHull(v).volume for v in peg_meshes(xml).values()), rel=1e-10)
+    assert visual_volume == pytest.approx(union_volume(peg_meshes(xml)), rel=1e-10)
 
 
 def test_chamfer_provides_clearance_at_first_entry():
@@ -152,6 +163,72 @@ def test_chamfer_provides_clearance_at_first_entry():
     assert contacts(0, 0.00025) > 0
     assert contacts(0.001, 0.00025) == 0
     assert contacts(0.001, 0.0008) > 0
+
+
+@pytest.mark.parametrize('outline,islands', CASES[3:], ids=CASE_NAMES[3:])
+@pytest.mark.parametrize('scale', [0.1, 1, 1000])
+def test_overlapping_extensions_are_allowed(outline, islands, scale, tmp_path):
+    """Overlap is valid when the union retains the intended boundary."""
+    kwargs = dict(hole=outline, islands=islands, scale=scale)
+    flat = mujoco.MjModel.from_xml_string(mjfit.peg(**kwargs))
+    xml = mjfit.peg(**kwargs, chamfer=8e-4)
+    meshes = peg_meshes(xml)
+    assert sum(ConvexHull(v).volume for v in meshes.values()) > union_volume(meshes) * 1.001
+    path = tmp_path / 'peg.xml'
+    path.write_text(mjfit.peg(**kwargs, chamfer=8e-4, mesh_dir=tmp_path / 'meshes'))
+    model = mujoco.MjModel.from_xml_path(str(path))
+    collisions = np.count_nonzero(model.geom_contype | model.geom_conaffinity)
+    assert collisions == flat.ngeom
+
+
+@pytest.mark.parametrize('config,chamfer', [
+    ('usb_c', 0.00025), ('db9', 0.0005), ('xlr3', 0.00075),
+])
+def test_invalid_extensions_are_repaired_without_more_geoms(config, chamfer, tmp_path):
+    """Rounded pockets need repartitioning rather than hulls of offset triangles."""
+    cfg = mjfit.load(config)
+    xml = mjfit.build(cfg, chamfer=chamfer, center=False)
+    flat_xml = mjfit.build(cfg, center=False)
+    model = mujoco.MjModel.from_xml_string(xml)
+    flat = mujoco.MjModel.from_xml_string(flat_xml)
+    meshes = peg_meshes(xml)
+    assert meshes.keys() == peg_meshes(flat_xml).keys()
+    assert model.ngeom == flat.ngeom
+
+    # Independently check the analytic offset at several depths, including
+    # above the bevel where the previous extension filled part of the pocket.
+    outline = shapes.from_spec(cfg['hole'])
+    islands = [shapes.from_spec(p) for p in cfg['islands']]
+    clearance = cfg['clearance']
+    length = cfg['peg_length']
+    xy = np.random.default_rng(42).uniform(outline.min(0), outline.max(0), (5000, 2))
+    hulls = [ConvexHull(v) for v in meshes.values()]
+    for fraction in (0.01, 0.5, 0.99, 1.5):
+        distance = clearance + max(0, 1 - fraction) * chamfer
+        expected = pg.points_inside(pg.offset_inward(outline, distance), xy)
+        for island in islands:
+            expected &= ~pg.points_inside(pg.offset_outward(island, distance), xy)
+        points = np.column_stack((xy, np.full(len(xy), -length / 2 + fraction * chamfer)))
+        inside = np.zeros(len(xy), dtype=bool)
+        for hull in hulls:
+            planes = hull.equations
+            inside |= np.all(points @ planes[:, :3].T + planes[:, 3] < -1e-12, axis=1)
+        np.testing.assert_array_equal(inside, expected)
+
+    def area(inset):
+        return (pg.signed_area(pg.offset_inward(outline, clearance + inset))
+                - sum(pg.signed_area(pg.offset_outward(p, clearance + inset)) for p in islands))
+
+    depth = cfg['plate_thickness'] + clearance
+    volume = chamfer * (area(chamfer) + 4 * area(chamfer / 2) + area(0)) / 6
+    volume += (depth - chamfer) * area(0)
+    volume += (length - depth) * pg.signed_area(pg.offset_inward(outline, clearance))
+    assert union_volume(meshes) == pytest.approx(volume, rel=1e-10)
+
+    path = tmp_path / 'peg.xml'
+    path.write_text(mjfit.build(cfg, chamfer=chamfer, center=False, mesh_dir=tmp_path / 'meshes'))
+    exported = mujoco.MjModel.from_xml_path(str(path))
+    assert np.count_nonzero(exported.geom_contype | exported.geom_conaffinity) == flat.ngeom
 
 
 @pytest.mark.parametrize('value', [-1e-4, float('nan'), float('inf'), '0.001', 0.03, 0.1])
